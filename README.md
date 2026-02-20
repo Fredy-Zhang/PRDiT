@@ -135,15 +135,13 @@ python evaluations/fid.py --dataset $DATASET --img_size $IMG_SIZE --data_root_re
 python evaluations/mmd.py --dataset $DATASET --img_size $IMG_SIZE --data_root_real $DATA_ROOT_REAL --data_root_fake $DATA_ROOT_FAKE --pretrain_path $PRETRAIN_PATH
 ```
 
-**WGAN Critic (Train)**
+**WGAN Critic**
 
-```
+```bash
+# Train for Wasserstein distance
 python evaluations/wgan_gp.py --seed $SEED --save_path $SAVE_PATH --batch_size $BATCH_SIZE --img_size $IMG_SIZE --gpu_id $GPU_ID --dataset $DATASET --data_root_real $DATA_ROOT_REAL --data_root_fake_0 $DATA_ROOT_FAKE_0 --data_root_fake_1 $DATA_ROOT_FAKE_1 --train_size $TRAIN_SIZE --val_size $VAL_SIZE
-```
 
-**WGAN Critic (Evaluate)**
-
-```
+# Evaluate for Wasserstein distance
 python evaluations/wgan_gp.py --eval --seed $SEED --save_path $SAVE_PATH --batch_size $BATCH_SIZE --img_size $IMG_SIZE --gpu_id $GPU_ID --dataset $DATASET --data_root_real $DATA_ROOT_REAL --data_root_fake_0 $DATA_ROOT_FAKE_0 --data_root_fake_1 $DATA_ROOT_FAKE_1
 ```
 
