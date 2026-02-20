@@ -1,8 +1,20 @@
 # PRDiT: Pixel-Level Residual Diffusion Transformer for Scalable 3D CT Volume Generation
 
+[![ICLR 2026](https://img.shields.io/badge/ICLR-2026-blue)](https://openreview.net/forum?id=bWtRZQ1rm2)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 Official implementation of **PRDiT** — *Pixel-Level Residual Diffusion Transformer* — a scalable approach for 3D CT volume generation, accepted at **ICLR 2026**.
+
+## 📑 Table of Contents
+
+- [Paper](#paper)
+- [Abstract](#abstract)
+- [Installation](#installation)
+- [Install Dataset](#install-dataset)
+- [Training](#training-from-scratch)
+- [Sampling](#sampling)
+- [Evaluation](#evaluation)
+- [Citing](#citing)
 
 ## Paper
 
@@ -20,23 +32,30 @@ Official implementation of **PRDiT** — *Pixel-Level Residual Diffusion Transfo
 
 ## Updates 🎉
 
-- 
+- *Add release milestones and updates here.*
 
 ## Abstract
+
+<p align="center">
+  <img src="assets/overview.png" width="100%" alt="PRDiT Architecture Overview">
+</p>
 
 Generating high-resolution 3D CT volumes with fine details remains challenging due to substantial computational demands and optimization difficulties inherent to existing generative models. In this paper, we propose the Pixel-Level Residual Diffusion Transformer (PRDiT), a scalable generative framework that synthesizes high-quality 3D medical volumes directly at voxel-level. PRDiT introduces a two-stage training architecture comprising 1) a local denoiser in the form of an MLP-based blind estimator operating on overlapping 3D patches to separate low-frequency structures efficiently, and 2) a global residual diffusion transformer employing memory-efficient attention to model and refine high-frequency residuals across entire volumes. This coarse-to-fine modeling strategy simplifies optimization, enhances training stability, and effectively preserves subtle structures without the limitations of an autoencoder bottleneck. Extensive experiments conducted on the LIDC-IDRI and RAD-ChestCT datasets demonstrate that PRDiT consistently outperforms state-of-the-art models, such as HA-GAN, 3D LDM and WDM-3D, achieving significantly lower 3D FID, MMD and Wasserstein distance scores.
 
 ## Installation
 
-Create a conda environment and install dependencies:
+**Requirements:** Python 3.10+, PyTorch 2.0+, CUDA 11.8+
 
 ```bash
+# Create conda environment
 conda create -n prdit python=3.10
 conda activate prdit
+
+# Install PyTorch
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
 pip install -r requirements.txt
 ```
-
----
 
 ## Install Dataset
 
@@ -51,21 +70,104 @@ We use **LIDC-IDRI** and **RAD-ChestCT** for our experiments. Prepare the datase
 ### RAD-ChestCT
 
 1. Download RAD-ChestCT from the official source [Zenodo](https://zenodo.org/records/6406114#.Ytl6OXbMLAQ).
-2. Place the data in `data/RAD-ChestCT/` and run preprocessing:
-
----
+2. Place the data in `data/RAD-ChestCT/` and run preprocessing.
 
 ## Training from Scratch
 
+### Basic Training
+```bash
+# Single GPU
+python train.py --config default.yaml
+
+# Multi-GPU
+torchrun --nproc_per_node=4 train.py --config default.yaml
+
+# Resume training
+python train.py --config default.yaml --resume_training
+
+# Debug mode
+python train.py --config default.yaml --debug
+```
+### Progressive Training
+```bash
+# Stage 1: Train Local denoiser module (depth=0)
+# Set model.name: "DiT-B/12/0" in config
+python train.py --config default.yaml --from_scratch
+
+# Stage 2: Train Global Residual DiT (depth>0)
+# Set model.name: "DiT-B/12/4" in config
+# Set pretrained_path: "/path/to/stage1/checkpoint.pt"
+python train.py --config default.yaml
+```
+
 ---
+
+## Sampling
+
+```bash
+# Basic sampling
+python sample.py --config default.yaml --ckpt $CKPT
+
+# Custom parameters
+python sample.py --config default.yaml \
+                 --ckpt $CKPT \
+                 --num-samples $NUM \
+                 --total-samples $NUMS \
+                 --output-dir $OUTPUT
+```
+**Output:** NIfTI files saved in specified directory.
 
 ## Evaluation
 
-### Generate samples
-
 ### Compute metrics (3D FID, MMD, Wasserstein distance)
 
----
+**3D FID Score:**
+```bash
+python evaluations/fid.py --dataset rad_chestCT \
+                   --img_size 128 \
+                   --data_root_real /path/to/real_data \
+                   --data_root_fake /path/to/fake_data \
+                   --pretrain_path ./evaluations/pretrained/resnet_50_23dataset.pt
+```
+
+- #### 3D MMD Score:
+```bash
+python evaluations/mmd.py --dataset rad_chestCT \
+                   --img_size 128 \
+                   --data_root_real /path/to/real_data \
+                   --data_root_fake /path/to/fake_data \
+                   --pretrain_path ./evaluations/pretrained/resnet_50_23dataset.pt
+```
+
+**WGAN Critic:**
+```bash
+# Train
+python evaluations/wgan_gp.py \
+    --seed $SEED \
+    --save_path $SAVE_PATH \
+    --batch_size $BATCH_SIZE \
+    --img_size $IMG_SIZE \
+    --gpu_id $GPU_ID \
+    --dataset $DATASET \
+    --data_root_real $DATA_ROOT_REAL \
+    --data_root_fake_0 $DATA_ROOT_FAKE_0 \
+    --data_root_fake_1 $DATA_ROOT_FAKE_1 \
+    --train_size $TRAIN_SIZE \
+    --val_size $VAL_SIZE
+
+# Evaluate
+python evaluations/wgan_gp.py \
+    --eval \
+    --seed $SEED \
+    --save_path $SAVE_PATH \
+    --batch_size $BATCH_SIZE \
+    --img_size $IMG_SIZE \
+    --gpu_id $GPU_ID \
+    --dataset $DATASET \
+    --data_root_real $DATA_ROOT_REAL \
+    --data_root_fake_0 $DATA_ROOT_FAKE_0 \
+    --data_root_fake_1 $DATA_ROOT_FAKE_1
+```
 
 ## Citing
 
