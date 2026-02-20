@@ -7,6 +7,7 @@ Official implementation of **PRDiT** — *Pixel-Level Residual Diffusion Transfo
 ## Paper
 
 - **Paper:** [Link to paper (Coming soon)](https://openreview.net/)
+- **Poster:** [Link to poster (Coming soon)](https://openreview.net/)
 - **Project Page:** [Link to project page (Coming soon)](https://openreview.net/)
 
 > *We will add the paper and project links once they are available.*
@@ -19,7 +20,7 @@ Official implementation of **PRDiT** — *Pixel-Level Residual Diffusion Transfo
 
 ## Updates 🎉
 
-- *Add your project milestones and release updates here (e.g., "February 20, 2025: Initial code release")*
+- 
 
 ## Abstract
 
@@ -46,19 +47,11 @@ We use **LIDC-IDRI** and **RAD-ChestCT** for our experiments. Prepare the datase
 1. Download the LIDC-IDRI dataset from [The Cancer Imaging Archive (TCIA)](https://wiki.cancerimagingarchive.net/display/Public/LIDC-IDRI).
 2. Place the data in `data/LIDC-IDRI/` (or update the path in your config).
 3. Preprocess the CT scans:
-   ```
-   coming soon
-   ```
 
 ### RAD-ChestCT
 
 1. Download RAD-ChestCT from the official source [Zenodo](https://zenodo.org/records/6406114#.Ytl6OXbMLAQ).
 2. Place the data in `data/RAD-ChestCT/` and run preprocessing:
-   ```
-   coming soon
-   ```
-
-*Update paths and preprocessing scripts based on your project structure.*
 
 ---
 
