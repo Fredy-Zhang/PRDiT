@@ -6,11 +6,11 @@ Official implementation of **PRDiT** — *Pixel-Level Residual Diffusion Transfo
 
 ## Paper
 
-- **Paper:** [Link to paper (Coming soon)](https://openreview.net/)
-- **Poster:** [Link to poster (Coming soon)](https://openreview.net/)
-- **Project Page:** [Link to project page (Coming soon)](https://openreview.net/)
+- **Paper:** [OpenReview](https://openreview.net/forum?id=bWtRZQ1rm2)
+- **Poster:** [Link to poster (Coming soon)](#)
+- **Project Page:** [Link to project page (Coming soon)](#)
 
-> *We will add the paper and project links once they are available.*
+> *Poster and project page links will be added when available.*
 
 ## Note 📝
 
@@ -72,16 +72,15 @@ We use **LIDC-IDRI** and **RAD-ChestCT** for our experiments. Prepare the datase
 If you find this work useful, please consider citing our paper:
 
 ```bibtex
-@inproceedings{,
-  title={PRDiT: Pixel-Level Residual Diffusion Transformer for Scalable 3D CT Volume Generation},
-  author={},
-  booktitle={International Conference on Learning Representations (ICLR)},
-  year={2026},
-  url={}
+@inproceedings{
+zhang2026pixellevel,
+title={Pixel-Level Residual Diffusion Transformer: Scalable 3D {CT} Volume Generation},
+author={Zhenkai Zhang and Markus Hiller and Krista A. Ehinger and Tom Drummond},
+booktitle={The Fourteenth International Conference on Learning Representations},
+year={2026},
+url={https://openreview.net/forum?id=bWtRZQ1rm2}
 }
 ```
-
-> *BibTeX entry will be updated once the paper is published. Please check back later for the full citation.*
 
 ## License
 
