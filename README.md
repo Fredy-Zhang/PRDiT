@@ -37,7 +37,7 @@ Official implementation of **PRDiT** — *Pixel-Level Residual Diffusion Transfo
 ## Abstract
 
 <p align="center">
-  <img src="assets/overview.png" width="100%" alt="PRDiT Architecture Overview">
+  <img src="assets/overview.png" width="95%" alt="PRDiT Architecture Overview">
 </p>
 
 Generating high-resolution 3D CT volumes with fine details remains challenging due to substantial computational demands and optimization difficulties inherent to existing generative models. In this paper, we propose the Pixel-Level Residual Diffusion Transformer (PRDiT), a scalable generative framework that synthesizes high-quality 3D medical volumes directly at voxel-level. PRDiT introduces a two-stage training architecture comprising 1) a local denoiser in the form of an MLP-based blind estimator operating on overlapping 3D patches to separate low-frequency structures efficiently, and 2) a global residual diffusion transformer employing memory-efficient attention to model and refine high-frequency residuals across entire volumes. This coarse-to-fine modeling strategy simplifies optimization, enhances training stability, and effectively preserves subtle structures without the limitations of an autoencoder bottleneck. Extensive experiments conducted on the LIDC-IDRI and RAD-ChestCT datasets demonstrate that PRDiT consistently outperforms state-of-the-art models, such as HA-GAN, 3D LDM and WDM-3D, achieving significantly lower 3D FID, MMD and Wasserstein distance scores.
@@ -121,52 +121,30 @@ python sample.py --config default.yaml \
 
 ### Compute metrics (3D FID, MMD, Wasserstein distance)
 
-**3D FID Score:**
-```bash
-python evaluations/fid.py --dataset rad_chestCT \
-                   --img_size 128 \
-                   --data_root_real /path/to/real_data \
-                   --data_root_fake /path/to/fake_data \
-                   --pretrain_path ./evaluations/pretrained/resnet_50_23dataset.pt
+The evaluation procedure runs as follows:
+
+**3D FID Score**
+
+```
+python evaluations/fid.py --dataset $DATASET --img_size $IMG_SIZE --data_root_real $DATA_ROOT_REAL --data_root_fake $DATA_ROOT_FAKE --pretrain_path $PRETRAIN_PATH
 ```
 
-- #### 3D MMD Score:
-```bash
-python evaluations/mmd.py --dataset rad_chestCT \
-                   --img_size 128 \
-                   --data_root_real /path/to/real_data \
-                   --data_root_fake /path/to/fake_data \
-                   --pretrain_path ./evaluations/pretrained/resnet_50_23dataset.pt
+**3D MMD Score**
+
+```
+python evaluations/mmd.py --dataset $DATASET --img_size $IMG_SIZE --data_root_real $DATA_ROOT_REAL --data_root_fake $DATA_ROOT_FAKE --pretrain_path $PRETRAIN_PATH
 ```
 
-**WGAN Critic:**
-```bash
-# Train
-python evaluations/wgan_gp.py \
-    --seed $SEED \
-    --save_path $SAVE_PATH \
-    --batch_size $BATCH_SIZE \
-    --img_size $IMG_SIZE \
-    --gpu_id $GPU_ID \
-    --dataset $DATASET \
-    --data_root_real $DATA_ROOT_REAL \
-    --data_root_fake_0 $DATA_ROOT_FAKE_0 \
-    --data_root_fake_1 $DATA_ROOT_FAKE_1 \
-    --train_size $TRAIN_SIZE \
-    --val_size $VAL_SIZE
+**WGAN Critic (Train)**
 
-# Evaluate
-python evaluations/wgan_gp.py \
-    --eval \
-    --seed $SEED \
-    --save_path $SAVE_PATH \
-    --batch_size $BATCH_SIZE \
-    --img_size $IMG_SIZE \
-    --gpu_id $GPU_ID \
-    --dataset $DATASET \
-    --data_root_real $DATA_ROOT_REAL \
-    --data_root_fake_0 $DATA_ROOT_FAKE_0 \
-    --data_root_fake_1 $DATA_ROOT_FAKE_1
+```
+python evaluations/wgan_gp.py --seed $SEED --save_path $SAVE_PATH --batch_size $BATCH_SIZE --img_size $IMG_SIZE --gpu_id $GPU_ID --dataset $DATASET --data_root_real $DATA_ROOT_REAL --data_root_fake_0 $DATA_ROOT_FAKE_0 --data_root_fake_1 $DATA_ROOT_FAKE_1 --train_size $TRAIN_SIZE --val_size $VAL_SIZE
+```
+
+**WGAN Critic (Evaluate)**
+
+```
+python evaluations/wgan_gp.py --eval --seed $SEED --save_path $SAVE_PATH --batch_size $BATCH_SIZE --img_size $IMG_SIZE --gpu_id $GPU_ID --dataset $DATASET --data_root_real $DATA_ROOT_REAL --data_root_fake_0 $DATA_ROOT_FAKE_0 --data_root_fake_1 $DATA_ROOT_FAKE_1
 ```
 
 ## Citing
