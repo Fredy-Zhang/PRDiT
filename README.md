@@ -104,16 +104,12 @@ python train.py --config default.yaml
 
 ## Sampling
 
-```bash
+```
 # Basic sampling
 python sample.py --config default.yaml --ckpt $CKPT
 
 # Custom parameters
-python sample.py --config default.yaml \
-                 --ckpt $CKPT \
-                 --num-samples $NUM \
-                 --total-samples $NUMS \
-                 --output-dir $OUTPUT
+python sample.py --config default.yaml --new --ckpt $CKPT --num-samples $SAMPLE_NUM --total-samples $STEP_NUMS --output-dir $OUTPUT
 ```
 **Output:** NIfTI files saved in specified directory.
 
