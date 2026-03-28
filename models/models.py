@@ -685,8 +685,19 @@ class FineRefiner(nn.Module):
         # Final projection to output space
         return self.final_layer(h, c)
 
+    # -------------------------------------------------------------------------
+    # Special Feature-Extraction Utilities
+    # -------------------------------------------------------------------------
+    # These helpers are intended for using a pretrained PRDiT transformer as a
+    # vision encoder. They do not change the standard denoising forward path.
+
     def get_recommended_capture_layer(self) -> int:
-        """Return the default transformer block index for feature extraction."""
+        """Return the default transformer block index for encoder-style features.
+
+        This is a special utility for pretrained-model feature extraction. By
+        default, it returns the midpoint transformer block, which is often a
+        stronger representation target than the final prediction head input.
+        """
         if len(self.blocks) == 0:
             raise RuntimeError("No transformer blocks are available for hidden-feature extraction.")
         return len(self.blocks) // 2
@@ -695,7 +706,7 @@ class FineRefiner(nn.Module):
         self,
         capture_layers: Optional[Union[int, Sequence[int]]],
     ) -> set[int]:
-        """Normalize and validate the requested transformer layer indices.
+        """Normalize and validate requested encoder feature layers.
 
         When no layer is provided, the midpoint transformer layer is used as
         the recommended default. For example, a 12-layer refiner defaults to
@@ -725,6 +736,9 @@ class FineRefiner(nn.Module):
         include_patch_embed: bool = False,
     ) -> Tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Run the transformer branch and capture hidden token features.
+
+        This is a special feature-extraction path for pretrained PRDiT models
+        when the transformer is reused as a vision encoder.
 
         Args:
             x: Input patch sequence `[B, N, C * extract_patch_size^3]`.
@@ -762,7 +776,7 @@ class FineRefiner(nn.Module):
         capture_layers: Optional[Union[int, Sequence[int]]] = None,
         include_patch_embed: bool = False,
     ) -> dict[str, torch.Tensor]:
-        """Return selected hidden token features from the transformer branch."""
+        """Return selected transformer hidden states for encoder-style reuse."""
         _, features = self.forward_hidden_features(
             x,
             c,
@@ -1128,10 +1142,10 @@ class PRDiT(nn.Module):
     ) -> dict[str, torch.Tensor]:
         """Extract hidden token features from the transformer refinement branch.
 
-        This helper is intended for feature-supervision or vision-encoder
-        targets. It runs the same patch extraction and timestep conditioning as
-        the fine branch, but stops before the final prediction head and returns
-        intermediate hidden states instead.
+        This is a special pretrained-model utility for feature-supervision or
+        vision-encoder targets. It runs the same patch extraction and timestep
+        conditioning as the fine branch, but stops before the final prediction
+        head and returns intermediate hidden states instead.
 
         Args:
             input: Input volume `[B, C, D, H, W]`.
