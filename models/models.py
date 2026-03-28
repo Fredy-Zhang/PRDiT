@@ -26,7 +26,7 @@ Main components:
 # Standard library imports
 import math
 import logging
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, Optional, Sequence, Tuple, Union
 
 # Third-party imports
 import torch
@@ -660,7 +660,7 @@ class FineRefiner(nn.Module):
         # Store configuration
         self.input_size = input_size
         self.patch_size = patch_size
-    
+
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         """
         Refine patch tokens with positional encoding and conditioned transformer blocks.
@@ -674,16 +674,103 @@ class FineRefiner(nn.Module):
         """
         # Project patches to transformer dimension
         h = self.patch_embedder(x)  # [B, N, hidden_size]
-        
+
         # Add positional encoding
         h = h + self.pos_embed
-        
+
         # Process through transformer blocks with conditioning
         for block in self.blocks:
             h = block(h, c)
-            
+
         # Final projection to output space
         return self.final_layer(h, c)
+
+    def get_recommended_capture_layer(self) -> int:
+        """Return the default transformer block index for feature extraction."""
+        if len(self.blocks) == 0:
+            raise RuntimeError("No transformer blocks are available for hidden-feature extraction.")
+        return len(self.blocks) // 2
+
+    def _normalize_capture_layers(
+        self,
+        capture_layers: Optional[Union[int, Sequence[int]]],
+    ) -> set[int]:
+        """Normalize and validate the requested transformer layer indices.
+
+        When no layer is provided, the midpoint transformer layer is used as
+        the recommended default. For example, a 12-layer refiner defaults to
+        layer 6.
+        """
+        if capture_layers is None:
+            return {self.get_recommended_capture_layer()}
+
+        if isinstance(capture_layers, int):
+            normalized = {capture_layers}
+        else:
+            normalized = {int(layer_idx) for layer_idx in capture_layers}
+
+        invalid = [layer_idx for layer_idx in sorted(normalized) if layer_idx < 0 or layer_idx >= len(self.blocks)]
+        if invalid:
+            raise ValueError(
+                f"capture_layers contains invalid layer indices {invalid}; "
+                f"valid range is [0, {len(self.blocks) - 1}]"
+            )
+        return normalized
+
+    def forward_hidden_features(
+        self,
+        x: torch.Tensor,
+        c: torch.Tensor,
+        capture_layers: Optional[Union[int, Sequence[int]]] = None,
+        include_patch_embed: bool = False,
+    ) -> Tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Run the transformer branch and capture hidden token features.
+
+        Args:
+            x: Input patch sequence `[B, N, C * extract_patch_size^3]`.
+            c: Timestep conditioning `[B, hidden_size]`.
+            capture_layers: Transformer block index or indices to capture. If
+                omitted, the recommended midpoint layer is captured by default.
+            include_patch_embed: Whether to also return the token features right
+                after patch embedding and positional encoding.
+
+        Returns:
+            A tuple `(final_hidden, features)` where:
+            - `final_hidden` is the final transformer token representation
+            - `features` is a dictionary containing captured hidden states
+        """
+        requested_layers = self._normalize_capture_layers(capture_layers)
+        features: dict[str, torch.Tensor] = {}
+
+        h = self.patch_embedder(x)
+        h = h + self.pos_embed
+        if include_patch_embed:
+            features["patch_embed"] = h
+
+        for layer_idx, block in enumerate(self.blocks):
+            h = block(h, c)
+            if layer_idx in requested_layers:
+                features[f"block_{layer_idx}"] = h
+
+        features["final"] = h
+        return h, features
+
+    def get_layer_features(
+        self,
+        x: torch.Tensor,
+        c: torch.Tensor,
+        capture_layers: Optional[Union[int, Sequence[int]]] = None,
+        include_patch_embed: bool = False,
+    ) -> dict[str, torch.Tensor]:
+        """Return selected hidden token features from the transformer branch."""
+        _, features = self.forward_hidden_features(
+            x,
+            c,
+            capture_layers=capture_layers,
+            include_patch_embed=include_patch_embed,
+        )
+        return features
+    
 
 # =============================================================================
 # Main PRDiT Model Architecture
@@ -1029,6 +1116,55 @@ class PRDiT(nn.Module):
             # For MLP-only model (stage 1), use only coarse output
             x = coarse_out
         return x
+
+    def extract_transformer_hidden_features(
+        self,
+        input: torch.Tensor,
+        t: torch.Tensor,
+        y: Optional[torch.Tensor] = None,
+        capture_layers: Optional[Union[int, Sequence[int]]] = None,
+        include_patch_embed: bool = False,
+        detach: bool = False,
+    ) -> dict[str, torch.Tensor]:
+        """Extract hidden token features from the transformer refinement branch.
+
+        This helper is intended for feature-supervision or vision-encoder
+        targets. It runs the same patch extraction and timestep conditioning as
+        the fine branch, but stops before the final prediction head and returns
+        intermediate hidden states instead.
+
+        Args:
+            input: Input volume `[B, C, D, H, W]`.
+            t: Timestep tensor `[B]`.
+            y: Unused class-conditioning placeholder retained for API symmetry.
+            capture_layers: Transformer block index or indices to capture. If
+                omitted, the recommended midpoint layer is returned by default.
+            include_patch_embed: Whether to also return the post-embedding token
+                features under the `"patch_embed"` key.
+            detach: Whether to detach the returned features from the autograd
+                graph.
+
+        Returns:
+            A dictionary of named hidden states. Keys follow the pattern
+            `"block_{idx}"`, plus optional `"patch_embed"` and always `"final"`.
+        """
+        del y  # PRDiT currently does not use class conditioning in this path.
+
+        if self.fine is None:
+            raise RuntimeError("Transformer hidden features are only available when PRDiT depth > 0.")
+
+        _, c_fine = self.t_embedder(t)
+        patches = self.coarse.patch_extractor(input)
+        _, features = self.fine.forward_hidden_features(
+            patches,
+            c_fine,
+            capture_layers=capture_layers,
+            include_patch_embed=include_patch_embed,
+        )
+
+        if detach:
+            return {name: value.detach() for name, value in features.items()}
+        return features
 
     def load_coarse_checkpoint(self, checkpoint_path: str) -> None:
         """
