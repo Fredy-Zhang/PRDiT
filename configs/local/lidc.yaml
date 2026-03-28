@@ -1,0 +1,46 @@
+# LIDC local configuration
+
+data:
+  # image_size: 128  # Size of input images [64 | 128 | 256]
+  # path: ""  # Root directory containing lidc_preprocessed/
+  train_list: "lidc_data/train.txt"
+  val_list: "lidc_data/val.txt"
+  task: "lidc"       # Public task alias used by the dataset factory
+  num_workers: 4     # Number of data loading workers
+  val_frac: 0.1      # Validation split ratio used when generating train.txt and val.txt
+  augment: False
+  normalize: True
+
+model:
+  name: "DiT-B/12/0"  # Model architecture name
+  num_classes: 1      # Number of classes for conditional generation
+  in_channels: 1      # Number of input channels
+  out_channels: 2     # Number of output channels
+  pretrained_path: ""
+  checkpoint: ""
+  flash_attn: True
+
+training:
+  batch_size: 64           # Global batch size for training
+  learning_rate: 1e-4      # Learning rate for AdamW optimizer
+  epochs: 6000             # Number of training epochs
+  seed: 42                 # Random seed for reproducibility
+  weight_decay: 0.0        # Weight decay for optimizer
+  gradient_clip: 1.0
+  compile_model: True      # Enable torch.compile for performance optimization
+  compile_mode: "default"  # Compilation mode: 'default', 'reduce-overhead', 'max-autotune'
+
+output:
+  results_dir: "results"         # Directory for saving results
+  checkpoint_dir: "checkpoints"  # Directory for saving model checkpoints
+
+logging:
+  log_every: 400    # Log metrics every N steps
+  ckpt_every: 1000  # Save checkpoint every N steps
+  eval_every: 1000  # Evaluate model every N epochs
+
+wandb:
+  project: ""  # Optional W&B project name; keep empty in public templates
+  entity: ""   # Optional W&B entity/username
+  tags: ""
+  enable: False
