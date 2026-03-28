@@ -19,7 +19,7 @@ Official implementation of **PRDiT** — *Pixel-Level Residual Diffusion Transfo
 ## Paper
 
 - **Paper:** [OpenReview](https://openreview.net/forum?id=bWtRZQ1rm2)
-- **Poster:** [Link to poster (Coming soon)](#)
+- **Poster:** [ICLR 2026 Poster](https://iclr.cc/media/PosterPDFs/ICLR%202026/10008602.png?t=1774447885.2973316)
 - **Project Page:** [Link to project page (Coming soon)](#)
 
 > *Poster and project page links will be added when available.*
