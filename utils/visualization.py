@@ -1,4 +1,4 @@
-"""TensorBoard visualization helpers for DiT-style models."""
+"""TensorBoard visualization helpers for PRDiT-style models."""
 
 from __future__ import annotations
 

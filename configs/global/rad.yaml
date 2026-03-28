@@ -12,7 +12,7 @@ data:
   normalize: True
 
 model:
-  name: "DiT-XL/12/4"  # Model architecture name, XL: 1152, 12: patch size, 4: network depth
+  name: "PRDiT-XL/12/4"  # Model architecture name, XL: 1152, 12: patch size, 4: network depth
   num_classes: 1       # Number of classes for conditional generation
   in_channels: 1       # Number of input channels
   out_channels: 2      # Number of output channels

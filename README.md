@@ -83,11 +83,11 @@ python train.py --config default.yaml --debug
 ### Progressive Training
 ```bash
 # Stage 1: Train Local denoiser module (depth=0)
-# Set model.name: "DiT-B/12/0" in config
+# Set model.name: "PRDiT-B/12/0" in config
 python train.py --config default.yaml --from_scratch
 
-# Stage 2: Train Global Residual DiT (depth>0)
-# Set model.name: "DiT-B/12/4" in config
+# Stage 2: Train Global Residual PRDiT (depth>0)
+# Set model.name: "PRDiT-B/12/4" in config
 # Set pretrained_path: "/path/to/stage1/checkpoint.pt"
 python train.py --config default.yaml
 ```

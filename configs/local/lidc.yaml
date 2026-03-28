@@ -12,7 +12,7 @@ data:
   normalize: True
 
 model:
-  name: "DiT-B/12/0"  # Model architecture name
+  name: "PRDiT-B/12/0"  # Model architecture name
   num_classes: 1      # Number of classes for conditional generation
   in_channels: 1      # Number of input channels
   out_channels: 2     # Number of output channels
