@@ -74,9 +74,6 @@ python train.py --config default.yaml
 # Multi-GPU
 torchrun --nproc_per_node=4 train.py --config default.yaml
 
-# Resume training
-python train.py --config default.yaml --resume_training
-
 # Debug mode
 python train.py --config default.yaml --debug
 ```
@@ -84,12 +81,12 @@ python train.py --config default.yaml --debug
 ```bash
 # Stage 1: Train Local denoiser module (depth=0)
 # Set model.name: "PRDiT-B/12/0" in config
-python train.py --config default.yaml --from_scratch
+python train.py --config "local/lidc.yaml" --from_scratch
 
 # Stage 2: Train Global Residual PRDiT (depth>0)
 # Set model.name: "PRDiT-B/12/4" in config
 # Set pretrained_path: "/path/to/stage1/checkpoint.pt"
-python train.py --config default.yaml
+python train.py --config "global/lidc.yaml"
 ```
 
 ---

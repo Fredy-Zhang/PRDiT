@@ -1,8 +1,8 @@
 # RAD-ChestCT global configuration
 
 data:
-  # image_size: 128  # Size of input images [64 | 128 | 256]
-  # path: ""  # Root directory containing rad_chestCT_preprocessed/
+  image_size: 128  # Size of input images [64 | 128 | 256]
+  path: ""  # Root directory containing rad_chestCT_preprocessed/
   train_list: "rad_data/train.txt"
   val_list: "rad_data/val.txt"
   task: "rad_chestct"   # Public task name used by the dataset factory

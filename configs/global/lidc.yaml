@@ -2,8 +2,8 @@
 # Config the image_size and dataroot path within Input parameters
 
 data:
-  # image_size: 128  # Size of input images [64 | 128 | 256]
-  # path: ""  # Root directory containing lidc_preprocessed/
+  image_size: 128  # Size of input images [64 | 128 | 256]
+  path: ""  # Root directory containing lidc_preprocessed/
   train_list: "lidc_data/train.txt"
   val_list: "lidc_data/val.txt"
   task: "lidc"      # Public task alias used by the dataset factory
