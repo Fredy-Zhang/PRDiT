@@ -41,6 +41,11 @@ from models.classes import Attention, RMSNorm
 from util import requires_grad
 from models.utils import get_normalized_3d_pos_enc
 
+# -------------------------------------------------------- #
+# TODO: this is to improve the stability, using the RMSNorm with image channel.
+from models.functions import FinalLayerRMS, MlpDenoiserRMS, CoarseDenoiserRMS
+# -------------------------------------------------------- #
+
 # Configure logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -203,11 +208,11 @@ class TimestepEmbedder(nn.Module):
     frozen while the fine branch keeps learning.
     
     Args:
-        hidden_size: Hidden dimension for shared MLP
-        coarse_hidden_size: Output dimension for coarse head
-        fine_hidden_size: Output dimension for fine head  
-        frequency_embedding_size: Dimension of sinusoidal embeddings
-        is_depth_zero: If True, fine_head becomes Identity (depth=0 models)
+        hidden_size: Shared hidden width used inside the timestep MLP.
+        coarse_hidden_size: Output width for the coarse-branch conditioning head.
+        fine_hidden_size: Output width for the fine-branch conditioning head.
+        frequency_embedding_size: Dimension of the sinusoidal timestep encoding.
+        is_depth_zero: If `True`, the fine head becomes `Identity` for coarse-only models.
     """
     
     def __init__(self, 
@@ -334,84 +339,30 @@ class PRDiTBlock(nn.Module):
 
 class FinalLayer(nn.Module):
     """
-    Output projection layer for the PRDiT refinement path.
+    Final processing layer for the transformer refinement branch.
 
-    The layer maps hidden patch features back to output patch predictions. For
-    dual-output setups (`out_channels == 2`), it keeps separate projections for
-    image and noise predictions and can optionally unpatchify them back into
-    dense 3D volumes.
-    
+    This layer maps transformer token features back into patch-space outputs
+    under timestep conditioning.
+
     Args:
-        hidden_size: Feature dimension
-        patch_size: Size of output patches
-        out_channels: Number of output channels
-        input_size: Size of input volume (for unpatchify)
+        hidden_size: Transformer token width entering the final projection.
+        patch_size: Edge length of each output patch.
+        out_channels: Number of channels predicted per output volume voxel.
     """
-    def __init__(self, hidden_size: int, patch_size: int, out_channels: int, input_size: int = None):
+    def __init__(self, hidden_size: int, patch_size: int, out_channels: int):
         super().__init__()
-        # TODO: use LayerNorm for noise head
-        self.norm_noise = nn.LayerNorm(hidden_size, 
-                                       elementwise_affine=False, 
-                                       eps=1e-6)
-        # TODO: use RMSNorm for image head
-        self.norm_image = RMSNorm(hidden_size, eps=1e-6, elementwise_affine=False)
-        
-        # Store configuration
-        self.patch_size = patch_size
-        self.input_size = input_size
-        self.out_channels = out_channels
-        
-        # Dual-head projection
-        if out_channels == 2:
-            self.linear_noise = nn.Linear(hidden_size, patch_size**3*1, bias=True)
-            self.linear_image = nn.Linear(hidden_size, patch_size**3*1, bias=True)
-        else:
-            self.linear = nn.Linear(hidden_size, 
-                                patch_size**3 * out_channels, 
-                                bias=True)
-            
-        # AdaLN conditioning for both heads
+        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.linear = nn.Linear(hidden_size, patch_size**3 * out_channels, bias=True)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 2 * hidden_size, bias=True)
         )
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """
-        Project hidden patch features into output patch or volume predictions.
-        
-        Args:
-            x: Input features [B, N, hidden_size]
-            c: Conditioning embedding [B, hidden_size]
-            
-        Returns:
-            Output predictions in patch format or dense volume format, depending
-            on `input_size` and `out_channels`.
-        """
-        if self.out_channels == 2:
-            # Generate conditioning parameters for both heads
-            shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
-            
-            # Process through separate heads with different normalization
-            h_noise = self.linear_noise(modulate(self.norm_noise(x), shift, scale))
-            h_image = self.linear_image(modulate(self.norm_image(x), shift, scale))
-            
-            # If input_size is provided, unpatchify to volume format
-            if self.input_size is not None:
-                noise_vol = unpatchify_3d(h_noise, out_channels=1, 
-                                        patch_size=self.patch_size, 
-                                        input_size=self.input_size)
-                image_vol = unpatchify_3d(h_image, out_channels=1, 
-                                        patch_size=self.patch_size, 
-                                        input_size=self.input_size)
-                return torch.cat([noise_vol, image_vol], dim=1)
-            else:
-                # Return patch format
-                return torch.cat([h_noise, h_image], dim=-1)
-        else:
-            # Single head for other configurations
-            shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
-            return self.linear(modulate(self.norm_image(x), shift, scale))
+        """Process and project features with conditioning."""
+        shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
+        x = modulate(self.norm_final(x), shift, scale)
+        return self.linear(x)
 
 class MlpDenoiser(nn.Module):
     """
@@ -421,63 +372,62 @@ class MlpDenoiser(nn.Module):
     SwiGLU blocks and timestep-conditioned modulation. It is the main workhorse
     for stage-1 coarse denoising.
     
+    Note:
+        In the coarse branch, `hidden_size` refers to the patch-token width
+        (`in_channels * extract_patch_size**3`), not the transformer hidden
+        size used by the fine branch.
+        `input_size`, `act_layer`, and `swiglu_mlp` are retained only for API
+        compatibility with older constructor call sites.
+
     Args:
-        input_size: Target cubic volume size used for unpatchifying outputs
-        hidden_size: Feature dimension (input/output)
-        patch_size: Size of output patches
-        out_channels: Number of output channels
-        mlp_ratio: Hidden layer expansion ratio
-        swiglu_mlp: Retained for compatibility with older constructor calls
+        input_size: Target cubic volume size used for reconstructing outputs.
+        hidden_size: Patch-token feature dimension used by the coarse MLP.
+        patch_size: Edge length of each output patch.
+        out_channels: Number of output channels to predict per patch.
+        mlp_ratio: Hidden layer expansion ratio inside the SwiGLU blocks.
+        swiglu_mlp: Retained for compatibility with older constructor calls.
     """
     
     def __init__(self, 
                  input_size: int,
                  hidden_size: int, 
                  patch_size: int, 
-                 out_channels: int, 
+                 out_channels: int,
+                 act_layer: Callable = nn.ReLU,
                  mlp_ratio: float = 1.0,
                  swiglu_mlp: bool = False):
         super().__init__()
-        
-        # Normalization layers (parameters controlled by conditioning)
-        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        
-        # TODO: use RMSNorm for image head, use LayerNorm for noise head
-        self.norm_image = RMSNorm(hidden_size, eps=1e-6, elementwise_affine=False)
-        self.norm_noise = nn.LayerNorm(hidden_size, eps=1e-6, elementwise_affine=False)
-        
-        # Two-layer MLP with SwiGLU activation
-        hidden_features = int(hidden_size * mlp_ratio)
-        self.patch_size = patch_size
-        self.input_size = input_size
-        
+
+        # These arguments are kept to avoid breaking older call sites, even
+        # though the current implementation only depends on the patch-token dim.
+        del input_size, act_layer, swiglu_mlp
+        token_dim = hidden_size
+
+        # Normalization layers (no affine parameters, controlled by conditioning)
+        self.norm1 = nn.LayerNorm(token_dim, elementwise_affine=False, eps=1e-6)
+        self.norm2 = nn.LayerNorm(token_dim, elementwise_affine=False, eps=1e-6)
+
+        # First MLP block
         self.mlp1 = SwiGLU(
-            in_features=hidden_size,
-            hidden_features=hidden_features,
+            in_features=token_dim,
+            hidden_features=int(token_dim * mlp_ratio),
             norm_layer=nn.LayerNorm,
             drop=0,
         )
-        
+
+        # Second MLP block
         self.mlp2 = SwiGLU(
-            in_features=hidden_size,
-            hidden_features=hidden_features,
+            in_features=token_dim,
+            hidden_features=int(token_dim * mlp_ratio),
             norm_layer=nn.LayerNorm,
             drop=0,
         )
-        
-        # Final projection to patch space
-        if out_channels == 2:
-            self.linear_nos = nn.Linear(hidden_size, patch_size**3*1, bias=True)
-            self.linear_img = nn.Linear(hidden_size, patch_size**3*1, bias=True)
-        else:
-            self.linear_final = nn.Linear(hidden_size, patch_size**3 * out_channels, 
-                                          bias=True)
-        
-        # AdaLN conditioning (6 params: 2 layers × 3 params each)
+
+        self.linear_final = nn.Linear(token_dim, patch_size**3 * out_channels, bias=True)
+
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+            nn.Linear(token_dim, 6 * token_dim, bias=True)
         )
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
@@ -485,109 +435,116 @@ class MlpDenoiser(nn.Module):
         Denoise patch tokens with timestep-conditioned MLP blocks.
         
         Args:
-            x: Input patches [B, N, hidden_size]
-            c: Conditioning embedding [B, hidden_size]
+            x: Input patch tokens `[B, N, token_dim]`.
+            c: Coarse-branch timestep conditioning `[B, token_dim]`.
             
         Returns:
-            Denoised output volume in channel-first 3D format.
+            Denoised patch predictions [B, N, patch_size^3 * out_channels].
         """
-        # Generate conditioning parameters
-        shift1, scale1, shift2, scale2, shift, scale = self.adaLN_modulation(c).chunk(6, dim=1)
-        
-        # Two-layer MLP with conditioning
+        # TODO: the previous implementation used separate image/noise heads with
+        # RMSNorm + LayerNorm and performed unpatchify inside this module. If we
+        # need that branch-specific behavior again, restore it here instead of
+        # the simpler single-head patch projection below.
+        shift1, scale1, shift2, scale2, shift3, scale3 = self.adaLN_modulation(c).chunk(6, dim=1)
+
         h = self.mlp1(modulate(self.norm1(x), shift1, scale1))
         h = self.mlp2(modulate(self.norm2(h), shift2, scale2))
-        
-        # TODO: use RMSNorm for image head, use LayerNorm for noise head
         h = h + x
-        #return self.linear_final(modulate(self.norm3(h + x), shift3, scale3))
-        h_img = self.linear_img(modulate(self.norm_image(h),   shift, scale))
-        h_noise = self.linear_nos(modulate(self.norm_noise(h), shift, scale))
-        # return torch.cat([h_noise, h_img], dim=-1)
-        img = unpatchify_3d(h_img, out_channels=1, 
-                            patch_size=self.patch_size, 
-                            input_size=self.input_size)
-        noise = unpatchify_3d(h_noise, out_channels=1, 
-                              patch_size=self.patch_size, 
-                              input_size=self.input_size)
-        return torch.cat([noise, img], dim=1)
+        h = modulate(h, shift3, scale3)
+        return self.linear_final(h)
 
 class CoarseDenoiser(nn.Module):
     """
-    Coarse denoising branch of PRDiT.
+    Coarse denoising path based on an MLP operating directly in patch space.
 
-    This branch extracts 3D patches from the input volume and denoises them with
-    the lightweight MLP denoiser. It supplies the base reconstruction used both
-    in standalone coarse models and in the staged hybrid setting.
-    
+    The coarse branch first extracts raw 3D patches from the input volume, then
+    denoises those patch tokens with `MlpDenoiser`.
+
+    Note:
+        `hidden_size` is retained for constructor compatibility with the full
+        PRDiT config, but the coarse MLP width is determined by the flattened
+        patch dimension `in_channels * extract_patch_size**3`.
+
     Args:
-        in_channels: Number of input channels
-        extract_patch_size: Size of patches to extract from input
-        patch_size: Size of output patches
-        out_channels: Number of output channels
-        input_size: Size of input volume (cubic)
-        stride: Stride for patch extraction
-        padding: Padding for patch extraction
-        mlp_ratio: MLP hidden layer expansion ratio
-        swiglu_mlp: Whether to use SwiGLU activation
+        in_channels: Number of channels in the input volume.
+        extract_patch_size: Edge length of the patches extracted from the input.
+        hidden_size: Legacy compatibility argument from the full PRDiT config.
+        patch_size: Edge length of each output patch predicted by the coarse branch.
+        out_channels: Number of channels predicted per voxel.
+        input_size: Edge length of the input/output cubic volume.
+        stride: Patch extraction stride.
+        padding: Reflection padding used before extraction.
+        mlp_ratio: SwiGLU expansion ratio inside the coarse MLP.
+        swiglu_mlp: Retained compatibility flag for coarse MLP variants.
+        act_layer: Retained compatibility hook for older constructor signatures.
     """
-    
-    def __init__(self,
-                 in_channels: int,
-                 extract_patch_size: int,
-                 patch_size: int,
-                 out_channels: int,
-                 input_size: int,
-                 stride: int = 4,
-                 padding: int = 2,
-                 mlp_ratio: float = 1.0,
-                 swiglu_mlp: bool = True):
+    def __init__(
+        self,
+        in_channels: int,
+        extract_patch_size: int,
+        hidden_size: int,
+        patch_size: int,
+        out_channels: int,
+        input_size: int,
+        stride: int = 4,
+        padding: int = 2,
+        mlp_ratio: float = 1.0,
+        swiglu_mlp: bool = True,
+        act_layer: Callable = nn.GELU
+    ):
         super().__init__()
-        
-        # Patch extraction
+        del hidden_size
+
+        # Patch extraction components
         self.patch_extractor = ExtractPatches3D(
             patch_size=extract_patch_size,
             stride=stride,
             padding=padding,
         )
         
-        # Calculate patch grid dimensions
+        # Calculate number of patches
         self.num_patches, self.grid_size = self.patch_extractor.compute_num_patches(input_size)
-        
-        # MLP denoiser with adaptive conditioning
-        input_dim = in_channels * extract_patch_size**3
+
+        # The coarse branch operates directly in patch space, so its feature
+        # width must stay equal to the flattened patch dimension. Naming these
+        # explicitly makes it easier to distinguish them from transformer dims.
+        patch_token_dim = in_channels * extract_patch_size**3
+        output_volume_size = input_size
+        output_patch_size = patch_size
+
         self.mlp_denoise = MlpDenoiser(
-            input_size=input_size,
-            hidden_size=input_dim,
-            patch_size=patch_size,
+            input_size=output_volume_size,
+            hidden_size=patch_token_dim,
+            patch_size=output_patch_size,
             out_channels=out_channels,
             swiglu_mlp=swiglu_mlp,
-            mlp_ratio=mlp_ratio
+            act_layer=act_layer,
+            mlp_ratio=mlp_ratio,
         )
-    
-    def forward(self, 
-                x: torch.Tensor, 
-                c: torch.Tensor, 
-                return_patches: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        
+    def forward(self, x: torch.Tensor, c: torch.Tensor, return_patches: bool = False) -> torch.Tensor:
         """
-        Run the coarse PRDiT branch on an input volume.
+        Run the coarse branch on an input volume.
         
         Args:
-            x: Input volume [B, C, D, H, W]
-            c: Timestep conditioning [B, hidden_size]
-            return_patches: If True, return both input patches and output
+            x: Input volume `[B, C, D, H, W]`.
+            c: Coarse-branch timestep conditioning `[B, patch_token_dim]`.
+            return_patches: Whether to also return the extracted raw patches.
             
         Returns:
-            The coarse output volume, or `(input_patches, coarse_output)` when
-            `return_patches=True`.
+            Patch predictions `[B, N, patch_size^3 * out_channels]`, or
+            `(patches, patch_predictions)` when `return_patches=True`.
         """
-        # Extract patches from input volume
-        patches = self.patch_extractor(x)  # [B, N, C * extract_patch_size^3]
+        # Extract patches
+        patches = self.patch_extractor(x)  # [B, N, C*P^3]
         
-        # Process through MLP denoiser with conditioning
-        denoised = self.mlp_denoise(patches, c)
+        # Process through MLP denoiser
+        patch_predictions = self.mlp_denoise(patches, c)
         
-        return (patches, denoised) if return_patches else denoised
+        if return_patches:
+            return patches, patch_predictions
+        else:
+            return patch_predictions
 
 class FineRefiner(nn.Module):
     """
@@ -598,19 +555,19 @@ class FineRefiner(nn.Module):
     model the higher-frequency residual detail that the coarse MLP path misses.
     
     Args:
-        in_channels: Number of input channels
-        extract_patch_size: Size of input patches
-        hidden_size: Transformer hidden dimension
-        patch_size: Size of output patches
-        out_channels: Number of output channels  
-        depth: Number of transformer layers
-        num_heads: Number of attention heads
-        num_patches: Total number of patches (for compatibility)
-        input_size: Size of input volume (cubic)
-        stride: Stride for patch processing
-        padding: Padding for patch processing
-        mlp_ratio: MLP expansion ratio in transformer blocks
-        flash_attn: Whether to use flash attention
+        in_channels: Number of input channels.
+        extract_patch_size: Edge length of patches extracted from the input volume.
+        hidden_size: Transformer token width used by the fine branch.
+        patch_size: Edge length of each output patch predicted by the fine branch.
+        out_channels: Number of output channels.
+        depth: Number of transformer refinement blocks.
+        num_heads: Number of attention heads.
+        num_patches: Legacy compatibility argument retained by some call sites.
+        input_size: Edge length of the input/output cubic volume.
+        stride: Retained compatibility argument for patch-processing configs.
+        padding: Retained compatibility argument for patch-processing configs.
+        mlp_ratio: Expansion ratio inside the transformer MLP blocks.
+        flash_attn: Whether to use flash attention.
     """
     
     def __init__(self,
@@ -628,6 +585,7 @@ class FineRefiner(nn.Module):
                  mlp_ratio: float = 4.0,
                  flash_attn: bool = False):
         super().__init__()
+        del num_patches, stride, padding
         
         logger.debug(f"FineRefiner: depth={depth}, hidden_size={hidden_size}, num_heads={num_heads}")
         
@@ -643,7 +601,9 @@ class FineRefiner(nn.Module):
         # Fixed positional embeddings
         grid_size = input_size // patch_size
         pos_embed = get_normalized_3d_pos_enc(grid_size=grid_size, embed_dim=hidden_size)
-        self.register_buffer('pos_embed', pos_embed.unsqueeze(0), persistent=False)
+        # TODO: To ensure compatibility with the current pretrained weights, 
+        #         setting it to true is preferable to setting it to false.
+        self.register_buffer('pos_embed', pos_embed.unsqueeze(0), persistent=True)
         
         # Stack of transformer blocks
         self.blocks = nn.ModuleList([
@@ -655,7 +615,10 @@ class FineRefiner(nn.Module):
         ])
         
         # Final output projection
-        self.final_layer = FinalLayer(hidden_size, patch_size, out_channels, input_size)
+        self.final_layer = FinalLayer(hidden_size, patch_size, out_channels) 
+        
+        #TODO: 
+        # self.final_layer = FinalLayerRMS(hidden_size, patch_size, out_channels, input_size)
         
         # Store configuration
         self.input_size = input_size
@@ -666,8 +629,8 @@ class FineRefiner(nn.Module):
         Refine patch tokens with positional encoding and conditioned transformer blocks.
         
         Args:
-            x: Input patch sequence [B, N, C * extract_patch_size^3]
-            c: Timestep conditioning [B, hidden_size]
+            x: Input patch tokens `[B, N, in_channels * extract_patch_size^3]`.
+            c: Fine-branch timestep conditioning `[B, hidden_size]`.
             
         Returns:
             Refined output in the format produced by `FinalLayer`.
@@ -808,19 +771,19 @@ class PRDiT(nn.Module):
     still allowing the model to recover fine detail later in training.
     
     Args:
-        input_size: Size of cubic input volume
-        patch_size: Size of cubic patches for processing
-        stride: Stride for patch extraction
-        padding: Padding for patch extraction
-        in_channels: Number of input channels (e.g., 1 for CT)
-        hidden_size: Hidden feature dimension
-        depth: Number of transformer layers (0=MLP-only, >0=hybrid)
-        num_heads: Number of attention heads in transformer
-        mlp_ratio: MLP hidden dimension expansion ratio
-        class_dropout_prob: Dropout probability for class conditioning
-        num_classes: Number of conditioning classes
-        learn_sigma: Whether to predict noise variance
-        flash_attn: Whether to use optimized flash attention
+        input_size: Edge length of the cubic input/output volume.
+        patch_size: Edge length of patches extracted from the input volume.
+        stride: Effective output patch size used by both coarse and fine heads.
+        padding: Reflection padding applied before patch extraction.
+        in_channels: Number of input channels (for example `1` for CT).
+        hidden_size: Transformer hidden width used by the fine branch.
+        depth: Number of transformer layers (`0` = coarse-only, `>0` = hybrid).
+        num_heads: Number of attention heads in the transformer branch.
+        mlp_ratio: MLP expansion ratio inside transformer refinement blocks.
+        class_dropout_prob: Retained compatibility argument for older configs.
+        num_classes: Retained compatibility argument for older configs.
+        learn_sigma: Whether the model predicts both image and noise channels.
+        flash_attn: Whether to use flash attention in the fine branch.
     """
     def __init__(self,
                  input_size: int = 32,
@@ -837,21 +800,29 @@ class PRDiT(nn.Module):
                  learn_sigma: bool = False,
                  flash_attn: bool = False):
         super().__init__()
+        del class_dropout_prob, num_classes
         
         # =====================================================================
         # Model Configuration
         # =====================================================================
+        extract_patch_size = patch_size
+        output_patch_size = stride
+
         self.learn_sigma = learn_sigma
         self.in_channels = in_channels
         self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.input_size = input_size
-        self.patch_size = stride  # Note: using stride as effective patch size
+        self.extract_patch_size = extract_patch_size
+        self.patch_size = output_patch_size
         self.depth = depth  
         self.hidden_size = hidden_size
         
         # Log model configuration (will be logged when rank is passed from trainer)
         self._config_to_log = {
-            'input_size': input_size, 'patch_size': patch_size, 'stride': stride,
+            'input_size': input_size,
+            'extract_patch_size': extract_patch_size,
+            'output_patch_size': output_patch_size,
+            'stride': stride,
             'in_channels': in_channels, 'hidden_size': hidden_size, 'depth': depth,
             'num_heads': num_heads, 'learn_sigma': learn_sigma
         }
@@ -861,7 +832,7 @@ class PRDiT(nn.Module):
         # =====================================================================
         self.t_embedder = TimestepEmbedder(
             hidden_size=hidden_size,
-            coarse_hidden_size=int(in_channels * patch_size**3),
+            coarse_hidden_size=int(in_channels * extract_patch_size**3),
             fine_hidden_size=hidden_size,
             frequency_embedding_size=256,
             is_depth_zero=(depth == 0)
@@ -874,7 +845,8 @@ class PRDiT(nn.Module):
         # Coarse Path: MLP-based denoising (always present)
         self.coarse = CoarseDenoiser(
             in_channels=in_channels,
-            extract_patch_size=patch_size,
+            hidden_size=hidden_size, 
+            extract_patch_size=extract_patch_size,
             patch_size=self.patch_size,
             out_channels=self.out_channels,
             input_size=input_size,
@@ -889,7 +861,7 @@ class PRDiT(nn.Module):
         if depth > 0:
             self.fine = FineRefiner(
                 in_channels=in_channels,
-                extract_patch_size=patch_size,
+                extract_patch_size=extract_patch_size,
                 hidden_size=hidden_size,
                 patch_size=self.patch_size,
                 out_channels=self.out_channels,
@@ -1094,10 +1066,11 @@ class PRDiT(nn.Module):
         refinement on top.
         
         Args:
-            input (torch.Tensor): Input volume [B, C, D, H, W]
-            t (torch.Tensor): Timestep tensor [B]
-            y (torch.Tensor, optional): Class conditioning
-            return_intermediate (bool): Whether to return intermediate features
+            input (torch.Tensor): Input volume `[B, C, D, H, W]`.
+            t (torch.Tensor): Diffusion timestep tensor `[B]`.
+            y (torch.Tensor, optional): Retained compatibility argument.
+            return_intermediate (bool): Whether to return coarse and fine outputs
+                before they are added together.
             
         Returns:
             The final denoised output, or `(coarse_output, fine_output)` when
@@ -1121,7 +1094,7 @@ class PRDiT(nn.Module):
             
             # Return intermediate outputs if requested
             if return_intermediate:
-                return coarse_out, fine_out
+                return self.unpatchify_3d(coarse_out), self.unpatchify_3d(fine_out)
             
             # Combine coarse and fine outputs
             # Both outputs are already in volume format [B, 2*C, D, H, W]
@@ -1129,6 +1102,9 @@ class PRDiT(nn.Module):
         else:
             # For MLP-only model (stage 1), use only coarse output
             x = coarse_out
+        
+        # reconstruct to full volume
+        x = self.unpatchify_3d(x)
         return x
 
     def extract_transformer_hidden_features(
