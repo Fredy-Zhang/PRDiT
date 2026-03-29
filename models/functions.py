@@ -20,6 +20,7 @@ import torch.nn as nn
 from timm.layers import SwiGLU
 
 from models.classes import RMSNorm
+from models.local_denoiser import ExtractPatches3D
 from models.utils import modulate, unpatchify_3d
 
 
@@ -265,7 +266,6 @@ class CoarseDenoiserRMS(nn.Module):
                  mlp_ratio: float = 1.0,
                  swiglu_mlp: bool = True):
         super().__init__()
-        from models.models import ExtractPatches3D
         
         # Patch extraction
         self.patch_extractor = ExtractPatches3D(
