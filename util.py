@@ -32,7 +32,9 @@ from torch.utils.data.distributed import DistributedSampler
 
 from datasets import get_voxel_dataset
 
+
 # ── 1. Configuration & Data Structures ──────────────────────────────────────
+
 
 class Config:
     """Recursive namespace providing dot-notation access to a configuration dict.

@@ -5,7 +5,7 @@ This module is intentionally slim: general-purpose utilities live in ``util.py``
 Responsibilities
 ----------------
 - ``train_step``     — single forward-backward-optimiser step with AMP support.
-- ``evaluate_model`` — validation loop that saves reconstructed sample images.
+- ``evaluate_model`` — dispatch to reconstruction (depth=0) or generative (depth>0) evaluation.
 - ``Trainer``        — stateful coordinator wiring all components together.
 - ``main``           — distributed-training entry point called by ``torchrun``.
 """
@@ -143,6 +143,95 @@ def train_step(
 # ── Validation / evaluation ──────────────────────────────────────────────────
 
 
+def _evaluate_reconstruction(
+    model: torch.nn.Module,
+    val_loader: Any,
+    diffusion: Any,
+    device: torch.device,
+    experiment_dir: str,
+    image_size: int,
+    epoch: int,
+    logger: logging.Logger,
+) -> Dict[str, float]:
+    """depth==0 path: single forward pass denoising evaluation with MSE loss."""
+    eval_loss = 0.0
+    num_batches = 0
+
+    with torch.no_grad():
+        for i, batch in enumerate(val_loader):
+            x = batch["image"].to(device, non_blocking=True)
+            t = torch.full((x.shape[0],), 100, device=device)
+            samples = diffusion.q_sample(x, t)
+
+            model_output = model(samples, t)
+            if isinstance(model_output, tuple):
+                model_output = model_output[0]
+
+            if model_output.shape[1] > x.shape[1]:
+                _, img_recon = model_output.chunk(2, dim=1)
+            else:
+                img_recon = model_output
+
+            eval_loss += (img_recon - x).pow(2).mean().item()
+            num_batches += 1
+
+            if i == 0:
+                save_evaluation_samples(img_recon, experiment_dir, image_size, epoch, 2, logger)
+                save_evaluation_samples(x, f"{experiment_dir}/gt", image_size, epoch, 2, logger)
+
+    avg_loss = eval_loss / num_batches if num_batches > 0 else 0.0
+    logger.info(f"Validation Loss (Average): {avg_loss:.4f}")
+    return {"eval_loss": eval_loss, "eval_loss_avg": avg_loss, "epoch": epoch}
+
+
+def _evaluate_generative(
+    model: torch.nn.Module,
+    diffusion: Any,
+    device: torch.device,
+    experiment_dir: str,
+    image_size: int,
+    epoch: int,
+    num_samples: int,
+    logger: logging.Logger,
+) -> Dict[str, float]:
+    """depth>0 path: full reverse diffusion from noise (sample.py style).
+
+    Generates ``num_samples`` volumes from pure Gaussian noise via
+    ``p_sample_loop`` and saves xs (final denoised) and x0 (predicted clean)
+    for visual inspection.  No ground-truth MSE is computed.
+    """
+    xs_path = os.path.join(experiment_dir, "xs")
+    x0_path = os.path.join(experiment_dir, "x0")
+    os.makedirs(xs_path, exist_ok=True)
+    os.makedirs(x0_path, exist_ok=True)
+
+    z = torch.randn(
+        num_samples, 1, image_size, image_size, image_size, device=device
+    ) * 0.5
+
+    with torch.no_grad():
+        xs_samples, x0_samples = diffusion.p_sample_loop(
+            model.forward,
+            z.shape,
+            z,
+            new_sampling=True,
+            model_kwargs={},
+        )
+
+    xs_final = xs_samples[-1]
+    save_evaluation_samples(xs_final, xs_path, image_size, epoch, 2, logger)
+    save_evaluation_samples(x0_samples, x0_path, image_size, epoch, 2, logger)
+
+    if logger:
+        logger.info(
+            f"Generated {num_samples} samples | "
+            f"xs [{xs_final.min():.3f}, {xs_final.max():.3f}] | "
+            f"x0 [{x0_samples.min():.3f}, {x0_samples.max():.3f}]"
+        )
+
+    return {"eval_loss": 0.0, "eval_loss_avg": 0.0, "epoch": epoch}
+
+
 def evaluate_model(
     model: torch.nn.Module,
     val_loader: Any,
@@ -153,31 +242,30 @@ def evaluate_model(
     image_size: int,
     epoch: int,
     logger: logging.Logger,
+    num_gen_samples: int = 4,
 ) -> Dict[str, float]:
-    """Run a full validation pass and save example reconstructions to disk.
+    """Dispatch to reconstruction or generative evaluation based on model depth.
 
-    On rank 0 the first batch produces:
-    - noisy inputs
-    - coarse / fine path outputs (when ``depth > 0``)
-    - final image reconstructions and ground-truth slices
+    - ``depth == 0``: single forward-pass denoising with MSE loss.
+    - ``depth  > 0``: full reverse diffusion from noise (no ground-truth loss).
 
     Args:
-        model:          EMA model to evaluate.
-        val_loader:     DataLoader yielding ``{"image": Tensor}`` batches.
-        diffusion:      Diffusion process exposing ``q_sample``.
-        device:         CUDA device for inference.
-        rank:           Process rank (visualisation only on rank 0).
-        experiment_dir: Root directory where sample images are saved.
-        image_size:     Spatial dimension used by ``save_evaluation_samples``.
-        epoch:          Current epoch index (embedded in saved file names).
-        logger:         Logger instance.
+        model:           EMA model to evaluate.
+        val_loader:      DataLoader yielding ``{"image": Tensor}`` batches.
+        diffusion:       Diffusion process exposing ``q_sample`` / ``p_sample_loop``.
+        device:          CUDA device for inference.
+        rank:            Process rank (evaluation only on rank 0).
+        experiment_dir:  Root directory where sample images are saved.
+        image_size:      Spatial dimension used by ``save_evaluation_samples``.
+        epoch:           Current epoch index (embedded in saved file names).
+        logger:          Logger instance.
+        num_gen_samples: Number of volumes to generate when ``depth > 0``.
 
     Returns:
         Dict with keys ``"eval_loss"``, ``"eval_loss_avg"``, ``"epoch"``.
     """
-    model.eval()
-    eval_loss = 0.0
-    num_batches = 0
+    if rank != 0:
+        return {"eval_loss": 0.0, "eval_loss_avg": 0.0, "epoch": epoch}
 
     if isinstance(device, int):
         device = torch.device(f"cuda:{device}")
@@ -187,54 +275,22 @@ def evaluate_model(
     inner_model = model.module if hasattr(model, "module") else model
     is_depth_zero = hasattr(inner_model, "depth") and inner_model.depth == 0
 
-    # Pre-create visualisation sub-dirs before iterating to avoid redundant calls.
-    if rank == 0 and not is_depth_zero:
-        for sub in ("coarse_path", "fine_path", "coarse_path_noise", "fine_path_noise"):
-            os.makedirs(os.path.join(experiment_dir, sub), exist_ok=True)
+    model.eval()
+    try:
+        if is_depth_zero:
+            result = _evaluate_reconstruction(
+                model, val_loader, diffusion, device,
+                experiment_dir, image_size, epoch, logger,
+            )
+        else:
+            result = _evaluate_generative(
+                model, diffusion, device,
+                experiment_dir, image_size, epoch, num_gen_samples, logger,
+            )
+    finally:
+        model.train()
 
-    with torch.no_grad():
-        for i, batch in enumerate(val_loader):
-            x = batch["image"].to(device, non_blocking=True)
-            t = torch.full((x.shape[0],), 100, device=device)
-            samples = diffusion.q_sample(x, t)
-
-            # First batch only: save coarse/fine intermediate paths.
-            if i == 0 and not is_depth_zero:
-                coarse_out, fine_out = model(samples, t, return_intermediate=True)
-                coarse_noise, coarse_img = coarse_out.chunk(2, dim=1)
-                fine_noise, fine_img = fine_out.chunk(2, dim=1)
-
-                if rank == 0:
-                    save_evaluation_samples(samples, f"{experiment_dir}/noisy", image_size, epoch, 2, logger)
-                    save_evaluation_samples(coarse_img, f"{experiment_dir}/coarse_path", image_size, epoch, 2, logger)
-                    save_evaluation_samples(fine_img, f"{experiment_dir}/fine_path", image_size, epoch, 2, logger)
-                    save_evaluation_samples(coarse_noise, f"{experiment_dir}/coarse_path_noise", image_size, epoch, 2, logger)
-                    save_evaluation_samples(fine_noise, f"{experiment_dir}/fine_path_noise", image_size, epoch, 2, logger)
-                    logger.info("Saved visualization of both coarse and fine path outputs")
-
-            model_output = model(samples, t)
-            if isinstance(model_output, tuple):
-                model_output = model_output[0]
-
-            # When the model predicts both noise and image, take the image half.
-            if model_output.shape[1] > x.shape[1]:
-                _, img_recon = model_output.chunk(2, dim=1)
-            else:
-                img_recon = model_output
-
-            eval_loss += (img_recon - x).pow(2).mean().item()
-            num_batches += 1
-
-            if rank == 0 and i == 0:
-                save_evaluation_samples(img_recon, experiment_dir, image_size, epoch, 2, logger)
-                save_evaluation_samples(x, f"{experiment_dir}/gt", image_size, epoch, 2, logger)
-
-    avg_loss = eval_loss / num_batches if num_batches > 0 else 0.0
-    if rank == 0:
-        logger.info(f"Validation Loss (Average): {avg_loss:.4f}")
-
-    model.train()
-    return {"eval_loss": eval_loss, "eval_loss_avg": avg_loss, "epoch": epoch}
+    return result
 
 
 # ── Trainer ──────────────────────────────────────────────────────────────────
@@ -652,6 +708,7 @@ class Trainer:
             self.config.data.image_size,
             epoch,
             self.logger,
+            num_gen_samples=getattr(self.config.training, "num_gen_samples", 4),
         )
 
 
