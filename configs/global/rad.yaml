@@ -31,7 +31,7 @@ training:
   compile_mode: "default"  # Compilation mode: 'default', 'reduce-overhead', 'max-autotune'
 
 output:
-  results_dir: "results"         # Directory for saving results
+  results_dir: "results_rad"         # Directory for saving results
   checkpoint_dir: "checkpoints"  # Directory for saving model checkpoints
 
 logging:
