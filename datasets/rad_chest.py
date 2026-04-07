@@ -160,9 +160,7 @@ class RADChestCTDataset(torch.utils.data.Dataset):
         """Return one volume sample, with optional random flip augmentation."""
         image = self._load_volume(self.file_paths[idx])
 
-        if self.augment:
-            prob = np.random.rand()
-            if prob > 0.5:
-                image = torch.flip(image, dims=[-1])
+        if self.augment and np.random.rand() > 0.5:
+            image = torch.flip(image, dims=[-1])
 
         return {"image": image}
