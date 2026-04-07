@@ -767,12 +767,12 @@ class GaussianDiffusion:
             model_kwargs = {}
         if noise is None:
             noise = th.randn_like(x_start)
-        batch_size = x_start.shape[0]
+        B, _, _, _, _ = x_start.shape # (B,1,H,W,D)
 
         x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
 
         terms = {}
-        if self.loss_type in {LossType.KL, LossType.RESCALED_KL}:
+        if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
             # Note: applying the KL loss here, for input data is From Pretrained VAE.
             terms["loss"] = self._vb_terms_bpd(
                 model=model,
@@ -784,14 +784,14 @@ class GaussianDiffusion:
             )["output"]
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
-        elif self.loss_type in {LossType.MSE, LossType.RESCALED_MSE}:
+        elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
             eps_recon = model(x_t, t, **model_kwargs)
             assert x_t.shape == x_start.shape
             assert eps_recon.shape == noise.shape
             assert eps_recon.shape == x_start.shape
             terms["loss"] = ((noise - eps_recon)**2).mean(dim=list(range(1,len(x_start.shape))))
 
-        assert terms["loss"].shape == th.Size([batch_size])
+        assert terms["loss"].shape == th.Size([B])
 
         return terms
 

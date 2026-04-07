@@ -32,9 +32,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from datasets import get_voxel_dataset
 
-
 # ── 1. Configuration & Data Structures ──────────────────────────────────────
-
 
 class Config:
     """Recursive namespace providing dot-notation access to a configuration dict.
@@ -366,6 +364,7 @@ def setup_dataloader(
         roi_size=roi_size,
         data_type=data_type,
         augment=augment,
+        rank=rank,
     )
 
     is_distributed = dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1

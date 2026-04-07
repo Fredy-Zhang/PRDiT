@@ -306,14 +306,46 @@ class PRDiT(nn.Module):
     def forward(
         self,
         input: torch.Tensor,
-        t: torch.Tensor,
+        t: Optional[Union[torch.Tensor, int]] = None,
         y: Optional[torch.Tensor] = None,
         return_intermediate: bool = False,
+        mode: str = "denoise",
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """Run the full two-stage PRDiT forward pass."""
+        """Run PRDiT in denoising mode or encoder-feature mode."""
         del y
+        if mode not in {"denoise", "encode"}:
+            raise ValueError(f"Invalid mode '{mode}'. Supported modes are ['denoise', 'encode'].")
+
+        if t is None:
+            if mode == "encode":
+                t = torch.full((input.shape[0],), 50, device=input.device, dtype=torch.long)
+            else:
+                raise ValueError("Denoise mode requires an explicit timestep tensor `t`.")
+        elif isinstance(t, int):
+            t = torch.full((input.shape[0],), t, device=input.device, dtype=torch.long)
+        elif t.ndim == 0:
+            t = t.expand(input.shape[0]).to(device=input.device)
+        else:
+            t = t.to(device=input.device)
 
         c_coarse, c_fine = self.t_embedder(t)
+
+        if mode == "encode":
+            if self.fine is None:
+                raise RuntimeError("Encode mode requires transformer depth > 0 (self.fine is None).")
+            if len(self.fine.blocks) <= 5:
+                raise RuntimeError(
+                    f"Encode mode requires at least 6 transformer blocks; found {len(self.fine.blocks)}."
+                )
+
+            patches = self.coarse.patch_extractor(input)
+            _, features = self.fine.forward_hidden_features(
+                patches,
+                c_fine,
+                capture_layers=5,
+                include_patch_embed=False,
+            )
+            return features["block_5"]
 
         with torch.no_grad() if self.depth > 0 else torch.enable_grad():
             if self.depth > 0 or return_intermediate:
@@ -333,6 +365,21 @@ class PRDiT(nn.Module):
 
         x = self.unpatchify_3d(x)
         return x
+
+    def get_vlm_features(
+        self,
+        x: torch.Tensor,
+        timestep: int = 50,
+        no_grad: bool = True,
+        detach: bool = False,
+    ) -> torch.Tensor:
+        """Return token features from the 6th transformer block for VLM integration."""
+        ctx = torch.no_grad() if no_grad else torch.enable_grad()
+        with ctx:
+            features = self.forward(x, t=timestep, mode="encode")
+        if detach:
+            features = features.detach()
+        return features
 
     def extract_transformer_hidden_features(
         self,
