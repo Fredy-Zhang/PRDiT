@@ -25,7 +25,6 @@ from util import requires_grad
 
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 
 class TimestepEmbedder(nn.Module):

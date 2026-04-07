@@ -67,31 +67,33 @@ available in [datasets/README.md](datasets/README.md).
 
 ## Training from Scratch
 
-Use `--config {local_config}` for local-denoiser training and
-`--config {global_config}` for global residual PRDiT training.
-Typical examples are `configs/local/lidc.yaml` and `configs/global/lidc.yaml`.
+Use `--config {config_name}` to specify the config filename (e.g., `lidc.yaml`).
+
+The subdirectory (`configs/local/` or `configs/global/`) is automatically selected:
+`--from_scratch` resolves to `configs/local/{config_name}` (local denoiser);
+omitting it resolves to `configs/global/{config_name}` (global residual PRDiT).
 
 ### Basic Training
 ```bash
 # Single GPU
-python train.py --config {local_config}
+python train.py --config {config}
 
 # Multi-GPU
-torchrun --nproc_per_node=4 train.py --config {local_config}
+torchrun --nproc_per_node=4 train.py --config {config}
 
 # Debug mode
-python train.py --config {local_config} --debug
+python train.py --config {config} --debug
 ```
 ### Progressive Training
 ```bash
 # Stage 1: Train Local denoiser module (depth=0)
 # Set model.name: "PRDiT-B/12/0" in config
-python train.py --config {local_config} --from_scratch
+python train.py --config {config} --from_scratch
 
 # Stage 2: Train Global Residual PRDiT (depth>0)
 # Set model.name: "PRDiT-B/12/4" in config
 # Set pretrained_path: "/path/to/stage1/checkpoint.pt"
-python train.py --config {global_config}
+python train.py --config {config}
 ```
 
 ---
@@ -100,10 +102,10 @@ python train.py --config {global_config}
 
 ```
 # Basic sampling
-python sample.py --config {global_config} --ckpt $CKPT
+python sample.py --config {config} --ckpt $CKPT
 
 # Custom parameters
-python sample.py --config {global_config} --new --ckpt $CKPT --num-samples $SAMPLE_NUM --total-samples $STEP_NUM --output-dir $OUTPUT
+python sample.py --config {config} --new --ckpt $CKPT --num-samples $SAMPLE_NUM --total-samples $STEP_NUM --output-dir $OUTPUT
 ```
 **Output:** NIfTI files saved in specified directory.
 

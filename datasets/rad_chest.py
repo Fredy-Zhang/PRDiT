@@ -147,7 +147,7 @@ class RADChestCTDataset(torch.utils.data.Dataset):
                 f"Expected preprocessed file {file_path} to contain a 'volume' or 'ct' key."
             )
         image = torch.from_numpy(array.astype(np.float32)).unsqueeze(0)
-        image = self.downsample(image)
+        # image = self.downsample(image)
         if self.normalize:
             image = self.normalize(image)
         return image

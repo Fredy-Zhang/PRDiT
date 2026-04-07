@@ -34,7 +34,6 @@ class LIDCVolumes(torch.utils.data.Dataset):
         self,
         directory,
         split_file,
-        test_flag=False,
         normalize=None,
         mode="train",
         img_size=256,

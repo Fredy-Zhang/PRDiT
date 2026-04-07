@@ -10,71 +10,7 @@ import numpy as np
 import torch as th
 import enum
 
-
-def normal_kl(mean1, logvar1, mean2, logvar2):
-    """
-    Compute the KL divergence between two gaussians.
-    Shapes are automatically broadcasted, so batches can be compared to
-    scalars, among other use cases.
-    """
-    tensor = None
-    for obj in (mean1, logvar1, mean2, logvar2):
-        if isinstance(obj, th.Tensor):
-            tensor = obj
-            break
-    assert tensor is not None, "at least one argument must be a Tensor"
-
-    # Force variances to be Tensors. Broadcasting helps convert scalars to
-    # Tensors, but it does not work for th.exp().
-    logvar1, logvar2 = [
-        x if isinstance(x, th.Tensor) else th.tensor(x).to(tensor)
-        for x in (logvar1, logvar2)
-    ]
-
-    return 0.5 * (
-        -1.0
-        + logvar2
-        - logvar1
-        + th.exp(logvar1 - logvar2)
-        + ((mean1 - mean2) ** 2) * th.exp(-logvar2)
-    )
-
-
-def approx_standard_normal_cdf(x):
-    """
-    A fast approximation of the cumulative distribution function of the
-    standard normal.
-    """
-    return 0.5 * (1.0 + th.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * th.pow(x, 3))))
-
-
-def discretized_gaussian_log_likelihood(x, *, means, log_scales):
-    """
-    Compute the log-likelihood of a Gaussian distribution discretizing to a
-    given image.
-    :param x: the target images. It is assumed that this was uint8 values,
-              rescaled to the range [-1, 1].
-    :param means: the Gaussian mean Tensor.
-    :param log_scales: the Gaussian log stddev Tensor.
-    :return: a tensor like x of log probabilities (in nats).
-    """
-    assert x.shape == means.shape == log_scales.shape
-    centered_x = x - means
-    inv_stdv = th.exp(-log_scales)
-    plus_in = inv_stdv * (centered_x + 1.0 / 255.0)
-    cdf_plus = approx_standard_normal_cdf(plus_in)
-    min_in = inv_stdv * (centered_x - 1.0 / 255.0)
-    cdf_min = approx_standard_normal_cdf(min_in)
-    log_cdf_plus = th.log(cdf_plus.clamp(min=1e-12))
-    log_one_minus_cdf_min = th.log((1.0 - cdf_min).clamp(min=1e-12))
-    cdf_delta = cdf_plus - cdf_min
-    log_probs = th.where(
-        x < -0.999,
-        log_cdf_plus,
-        th.where(x > 0.999, log_one_minus_cdf_min, th.log(cdf_delta.clamp(min=1e-12))),
-    )
-    assert log_probs.shape == x.shape
-    return log_probs
+from .diffusion_utils import discretized_gaussian_log_likelihood, normal_kl
 
 
 def mean_flat(tensor):
@@ -211,6 +147,38 @@ def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
         t2 = (i + 1) / num_diffusion_timesteps
         betas.append(min(1 - alpha_bar(t2) / alpha_bar(t1), max_beta))
     return np.array(betas)
+
+def patchify_with_mask(x, patch_size, threshold=0.01):
+    """
+    Patchify the 3D input volume and generate a mask for non-empty patches.
+    Args:
+        x: Input tensor of shape (B, C, D, H, W), values in [-1, 1].
+        patch_size: Patch size (assumes cubic patches).
+        threshold: Threshold for determining "non-empty" patches.
+    Returns:
+        patches: Flattened patches of shape (B, num_patches, patch_size**3 * C).
+        mask: Binary mask indicating non-empty patches (B, num_patches).
+    """
+    B, C, D, H, W = x.shape
+    p = patch_size
+    x = (x + 1) * 0.5
+
+    # Ensure dimensions are divisible by patch size
+    assert D % p == 0 and H % p == 0 and W % p == 0, "Input dimensions must be divisible by patch size."
+
+    # Unfold input into patches
+    patches = x.unfold(2, p, p).unfold(3, p, p).unfold(4, p, p)
+    patches = patches.contiguous().view(B, C, -1, p, p, p)
+    num_patches = patches.shape[2]
+
+    # Flatten patches to (B, num_patches, patch_size**3 * C)
+    patches = patches.permute(0, 2, 1, 3, 4, 5).reshape(B, num_patches, -1)
+
+    # Compute mask: mean absolute value of each patch
+    mask = (patches.abs().mean(dim=-1) > threshold).float()  # 1 for non-empty, 0 for empty
+
+    return patches, mask
+
 
 class GaussianDiffusion:
     """
