@@ -135,8 +135,8 @@ def get_argument_parser() -> argparse.ArgumentParser:
                         help="Number of volumes to generate per batch (default: 4).")
     parser.add_argument("--total-samples", type=int, default=1000,
                         help="Total number of volumes to generate (default: 1000).")
-    parser.add_argument("--num-sampling-steps", type=int, default=250,
-                        help="Number of DDPM reverse diffusion steps (default: 250).")
+    parser.add_argument("--num-sampling-steps", type=int, default=1000,
+                        help="Number of DDPM reverse diffusion steps (default: 1000).")
     parser.add_argument("--output-dir", type=str, default="samples",
                         help="Directory in which xs/ and x0/ sub-folders are created (default: samples).")
     parser.add_argument("--new", action="store_true",

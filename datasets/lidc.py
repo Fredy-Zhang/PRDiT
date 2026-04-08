@@ -33,30 +33,36 @@ class LIDCVolumes(torch.utils.data.Dataset):
     def __init__(
         self,
         directory,
-        split_file,
+        split_file=None,
         normalize=None,
         mode="train",
         img_size=256,
+        split_dir=None,
         rank=0,
         augment=False,
     ):
         """
         Args:
-            directory: Root directory for resolving relative split entries
-            split_file: Path to the txt file containing image paths
-            mode: 'train' or 'val'
+            directory: Root directory for resolving relative split entries,
+                       or directory of generated volumes for mode='fake'
+            split_file: Path to the txt file for mode='train'/'val', or list
+                        of paths to merge for mode='real'. Takes precedence over split_dir.
+            mode: 'train' | 'val' — load from split file (training);
+                  'real'          — merge train.txt + val.txt (evaluation ground truth);
+                  'fake'          — scan all .nii.gz files in directory (evaluation generated)
             img_size: Target image size (64, 128, or 256)
+            split_dir: Directory containing train.txt and val.txt for mode='real'.
         """
         super().__init__()
 
         assert img_size in [64, 128, 256], "Supported image sizes: 64, 128, 256"
+        assert mode in ("train", "val", "real", "fake"), \
+            "mode must be 'train', 'val', 'real', or 'fake'"
 
         self.rank = rank
         self.mode = mode
         self.logger = self._setup_logger(rank)
         self.directory = str(Path(directory).expanduser())
-        self.split_path = str(Path(split_file).expanduser())
-        self.mode = mode
         self.img_size = img_size
         self.augment = augment
         self.normalize = normalize if normalize is not None else (lambda x: 2 * x - 1)
@@ -64,21 +70,46 @@ class LIDCVolumes(torch.utils.data.Dataset):
         self.database = []
 
         if rank == 0:
-            self.logger.info(f"Initializing LIDC dataset in {mode} mode")
-            self.logger.info(f"Data directory: {self.directory}")
-            self.logger.info(f"Loading paths from: {self.split_path}")
+            self.logger.info(f"Initializing LIDC dataset in '{mode}' mode")
+            self.logger.info(f"Directory: {self.directory}")
 
-        if not os.path.exists(self.split_path):
-            raise FileNotFoundError(f"Split file not found: {self.split_path}")
-
-        with open(self.split_path, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f.readlines() if line.strip()]
-
-        resolved_paths = self._resolve_split_entries(lines)
-        self.database = [{"image": path} for path in resolved_paths]
+        if mode == "fake":
+            # Scan all .nii.gz files directly in the directory
+            paths = sorted(str(p) for p in Path(self.directory).glob("*.nii.gz"))
+            if not paths:
+                raise FileNotFoundError(
+                    f"No .nii.gz files found in fake directory: {self.directory}"
+                )
+            self.database = [{"image": p, "name": os.path.basename(p)} for p in paths]
+        elif mode == "real":
+            # Resolve split files: explicit list > split_dir/train.txt + split_dir/val.txt
+            if not split_file:
+                if split_dir is None:
+                    raise ValueError(
+                        "For mode='real', provide either split_dir (directory containing "
+                        "train.txt and val.txt) or an explicit split_file list."
+                    )
+                split_dir = str(Path(split_dir).expanduser())
+                split_file = [
+                    os.path.join(split_dir, "train.txt"),
+                    os.path.join(split_dir, "val.txt"),
+                ]
+            paths = self._load_real_splits(split_file)
+            self.database = [{"image": p} for p in paths]
+        else:
+            # 'train' or 'val': use the provided split file
+            if split_file is None:
+                raise ValueError("split_file must be provided for mode='train' or 'val'.")
+            self.split_path = str(Path(split_file).expanduser())
+            if not os.path.exists(self.split_path):
+                raise FileNotFoundError(f"Split file not found: {self.split_path}")
+            with open(self.split_path, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f if line.strip()]
+            paths = self._resolve_split_entries(lines)
+            self.database = [{"image": p} for p in paths]
 
         if rank == 0:
-            self.logger.info(f"Loaded {len(self.database)} samples for {mode}")
+            self.logger.info(f"Loaded {len(self.database)} samples")
 
         self._preload_data()
 
@@ -97,10 +128,25 @@ class LIDCVolumes(torch.utils.data.Dataset):
             logger.addHandler(logging.NullHandler())
         return logger
 
+    def _load_real_splits(self, split_files):
+        """Merge multiple split files to build the full ground-truth file list."""
+        entries = []
+        for path in split_files:
+            path = str(Path(path).expanduser())
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Split file not found: {path}")
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = [line.strip() for line in f if line.strip()]
+            entries.extend(loaded)
+            self.logger.info(f"Loaded {len(loaded)} entries from {path}")
+        if not entries:
+            raise ValueError(f"All provided split files are empty: {split_files}")
+        return self._resolve_split_entries(entries)
+
     def _resolve_split_entries(self, entries):
         """Resolve absolute, relative, and filename-only entries from a split file."""
         resolved = []
-        split_dir = os.path.dirname(self.split_path)
+        split_dir = os.path.dirname(getattr(self, "split_path", self.directory))
         for entry in entries:
             if os.path.isabs(entry):
                 resolved.append(entry)
@@ -155,12 +201,15 @@ class LIDCVolumes(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         """Return one cached volume sample, with optional augmentation."""
-        name = self.database[index]["image"]
+        entry = self.database[index]
+        name = entry["image"]
         image = self.data_cache[name]
 
         if self.augment and np.random.rand() > 0.5:
             image = torch.flip(image, dims=[-1])
 
+        if self.mode == "fake":
+            return image, entry["name"]
         return {"image": image}
 
     def __len__(self):

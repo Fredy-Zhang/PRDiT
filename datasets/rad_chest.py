@@ -38,6 +38,7 @@ class RADChestCTDataset(torch.utils.data.Dataset):
         mode="train",
         img_size=256,
         split_file=None,
+        split_dir=None,
         normalize=None,
         augment=False,
         rank=0,
@@ -47,65 +48,90 @@ class RADChestCTDataset(torch.utils.data.Dataset):
 
         Args:
             directory: Path to preprocessed `.npz` files with a `volume` key
-            mode: Split type ('train' | 'val')
+            mode: 'train' | 'val' — load from split file (training);
+                  'real'          — merge train.txt + val.txt (evaluation ground truth);
+                  'fake'          — scan all .npz files in directory (evaluation generated)
             img_size: Target image size (256, 128, or 64)
-            split_file: Path to `train.txt` or `val.txt`
+            split_file: Explicit split file path (str) for 'train'/'val', or list of paths
+                        for 'real'. Takes precedence over split_dir.
+            split_dir: Directory containing train.txt and val.txt for mode='real'.
             rank: Process rank for distributed training
         """
         super().__init__()
         assert img_size in (256, 128, 64), "img_size must be 256, 128, or 64"
-        assert mode in ("train", "val"), "mode must be 'train' or 'val'"
-        
+        assert mode in ("train", "val", "real", "fake"), \
+            "mode must be 'train', 'val', 'real', or 'fake'"
+
         self.rank = rank
         self.logger = get_rank_logger("RADChestCT", rank)
-        
+
         self.directory = str(Path(directory).expanduser())
         self.mode = mode
         self.img_size = img_size
         self.augment = augment
-        self.rank = rank
         self.normalize = normalize
-        if split_file is None:
-            raise ValueError("split_file must be provided.")
-        self.split_path = str(Path(split_file).expanduser())
 
         if rank == 0:
-            self.logger.info(f"Initializing RAD-ChestCT dataset in {mode} mode")
-            self.logger.info(f"Preprocessed data directory: {directory}")
-            self.logger.info(f"Split file: {self.split_path}")
+            self.logger.info(f"Initializing RAD-ChestCT dataset in '{mode}' mode")
+            self.logger.info(f"Directory: {self.directory}")
             self.logger.info(f"Image size: {img_size}x{img_size}x{img_size}")
-            self.logger.info(f"Using custom normalization: {normalize is not None}")
-            self.logger.info(f"Using augmentation: {augment}")
 
-        if not os.path.exists(self.split_path):
-            raise FileNotFoundError(
-                f"Missing split file: {self.split_path}."
+        if mode == "fake":
+            # Collect all .npz files directly under the directory
+            self.file_paths = sorted(
+                str(p) for p in Path(self.directory).glob("*.npz")
             )
+            if not self.file_paths:
+                raise FileNotFoundError(
+                    f"No .npz files found in fake directory: {self.directory}"
+                )
+        elif mode == "real":
+            # Resolve split files: explicit list > split_dir/train.txt + split_dir/val.txt
+            if not split_file:
+                if split_dir is None:
+                    raise ValueError(
+                        "For mode='real', provide either split_dir (directory containing "
+                        "train.txt and val.txt) or an explicit split_file list."
+                    )
+                split_dir = str(Path(split_dir).expanduser())
+                split_file = [
+                    os.path.join(split_dir, "train.txt"),
+                    os.path.join(split_dir, "val.txt"),
+                ]
+            self.file_paths = self._load_real_splits(split_file)
+        else:
+            # 'train' or 'val': use the provided split file (single path string)
+            if split_file is None:
+                raise ValueError("split_file must be provided for mode='train' or 'val'.")
+            self.split_path = str(Path(split_file).expanduser())
+            if not os.path.exists(self.split_path):
+                raise FileNotFoundError(f"Missing split file: {self.split_path}")
+            entries = read_split_file(self.split_path)
+            if not entries:
+                raise ValueError(f"Split file is empty: {self.split_path}")
+            self.file_paths = self._resolve_split_entries(entries)
 
-        entries = read_split_file(self.split_path)
+        if rank == 0:
+            self.logger.info(f"Loaded {len(self.file_paths)} samples")
+
+    def _load_real_splits(self, split_files):
+        """Merge multiple split files to build the full ground-truth file list."""
+        entries = []
+        for path in split_files:
+            path = str(Path(path).expanduser())
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Split file not found: {path}")
+            loaded = read_split_file(path)
+            entries.extend(loaded)
+            self.logger.info(f"Loaded {len(loaded)} entries from {path}")
         if not entries:
-            raise ValueError(f"Split file is empty: {self.split_path}")
-        self.file_paths = self._resolve_split_entries(entries)
-
-        if rank == 0:
-            self.logger.info(f"Loaded {len(self.file_paths)} file paths from split")
-
-        if rank == 0 and len(self.file_paths) > 0:
-            first_sample = self._load_volume(self.file_paths[0]).cpu().numpy()
-            self.logger.info("Data Statistics (first sample):")
-            self.logger.info("--- Preprocessed RAD-ChestCT [0,1] range ---")
-            self.logger.info(f"Min:  {np.min(first_sample):.6f}")
-            self.logger.info(f"Max:  {np.max(first_sample):.6f}")
-            self.logger.info(f"Mean: {np.mean(first_sample):.6f}")
-            self.logger.info(f"Std:  {np.std(first_sample):.6f}")
-
-        if rank == 0:
-            self.logger.info(f"Final {mode} size: {len(self.file_paths)}")
+            raise ValueError(f"All provided split files are empty: {split_files}")
+        return self._resolve_split_entries(entries)
 
     def _resolve_split_entries(self, entries):
         """Resolve absolute, relative, and filename-only paths from the split file."""
         resolved = []
-        split_dir = os.path.dirname(self.split_path)
+        split_dir = os.path.dirname(getattr(self, "split_path", self.directory))
         for entry in entries:
             if os.path.isabs(entry):
                 resolved.append(entry)
