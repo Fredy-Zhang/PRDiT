@@ -18,15 +18,14 @@ import torch.nn as nn
 from timm.models.vision_transformer import Mlp
 
 from models.classes import Attention
-from models.utils import get_normalized_3d_pos_enc, modulate
+from models.utils import get_normalized_3d_pos_enc, modulate, get_3d_sincos_pos_embed
 
 
 logger = logging.getLogger(__name__)
 
 
 class PatchEmbed3D(nn.Module):
-    """
-    Embed flattened 3D patches with an MLP plus a linear skip projection.
+    """Embed flattened 3D patches with an MLP plus a linear skip projection.
 
     The main path learns a nonlinear projection into the hidden space, while the
     skip path preserves a direct linear route from raw patch values to the final
@@ -44,6 +43,29 @@ class PatchEmbed3D(nn.Module):
         activation: Callable = nn.GELU(approximate="tanh"),
         dropout: float = 0.0,
     ):
+        """Initialize the 3D patch embedder.
+
+        Parameters
+        ----------
+        patch_size : int, optional
+            Cubic patch edge length; the raw token dimension is
+            ``in_chans * patch_size³`` (default ``16``).
+        in_chans : int, optional
+            Number of input volume channels (default ``1``).
+        embed_dim : int, optional
+            Output embedding dimension (default ``768``).
+        norm_layer : callable or None, optional
+            Normalization applied after the residual sum; ``None`` disables it
+            (default ``nn.LayerNorm``).
+        mlp_ratio : float, optional
+            Hidden-layer expansion factor relative to ``embed_dim``
+            (default ``4.0``).
+        activation : callable, optional
+            Nonlinearity applied between the two MLP layers
+            (default ``nn.GELU(approximate='tanh')``).
+        dropout : float, optional
+            Dropout probability applied to the output embedding (default ``0.0``).
+        """
         super().__init__()
 
         input_dim = in_chans * (patch_size**3)
@@ -64,7 +86,18 @@ class PatchEmbed3D(nn.Module):
         self.drop = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Embed patch tokens into the transformer hidden space."""
+        """Embed patch tokens into the transformer hidden space.
+
+        Parameters
+        ----------
+        x : torch.Tensor, shape ``(B, N, in_chans * patch_size³)``
+            Flattened 3D patch tokens.
+
+        Returns
+        -------
+        torch.Tensor, shape ``(B, N, embed_dim)``
+            Normalized and optionally dropped patch embeddings.
+        """
         h = self.fc1(x)
         h = self.act(h)
         h = self.fc2(h)
@@ -74,8 +107,7 @@ class PatchEmbed3D(nn.Module):
 
 
 class DiTBlock(nn.Module):
-    """
-    Transformer refinement block with AdaLN-Zero conditioning.
+    """Transformer refinement block with AdaLN-Zero conditioning.
 
     Each block applies attention and MLP updates under timestep-conditioned
     modulation. The conditioning network predicts the shift, scale, and gating
@@ -90,6 +122,22 @@ class DiTBlock(nn.Module):
         flash_attn: bool = False,
         **block_kwargs,
     ):
+        """Initialize a DiT transformer block.
+
+        Parameters
+        ----------
+        hidden_size : int
+            Token feature dimension.
+        num_heads : int
+            Number of self-attention heads.
+        mlp_ratio : float, optional
+            MLP hidden-layer expansion factor (default ``4.0``).
+        flash_attn : bool, optional
+            Enable ``F.scaled_dot_product_attention`` in the attention layer
+            (default ``False``).
+        **block_kwargs
+            Extra keyword arguments forwarded to :class:`~models.classes.Attention`.
+        """
         super().__init__()
 
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
@@ -116,7 +164,20 @@ class DiTBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """Apply one transformer refinement block under timestep conditioning."""
+        """Apply one transformer refinement block under timestep conditioning.
+
+        Parameters
+        ----------
+        x : torch.Tensor, shape ``(B, N, hidden_size)``
+            Input token sequence.
+        c : torch.Tensor, shape ``(B, hidden_size)``
+            Timestep conditioning vector.
+
+        Returns
+        -------
+        torch.Tensor, shape ``(B, N, hidden_size)``
+            Updated token sequence after attention and MLP sublayers.
+        """
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
@@ -124,14 +185,25 @@ class DiTBlock(nn.Module):
 
 
 class FinalLayer(nn.Module):
-    """
-    Final processing layer for the transformer refinement branch.
+    """Final processing layer for the transformer refinement branch.
 
-    This layer maps transformer token features back into patch-space outputs
-    under timestep conditioning.
+    Maps transformer token features back into patch-space outputs under
+    timestep conditioning.
     """
 
     def __init__(self, hidden_size: int, patch_size: int, out_channels: int):
+        """Initialize the final projection layer.
+
+        Parameters
+        ----------
+        hidden_size : int
+            Transformer token width entering this layer.
+        patch_size : int
+            Cubic output patch edge length; output width is
+            ``patch_size³ * out_channels``.
+        out_channels : int
+            Number of output channels predicted per patch voxel.
+        """
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(hidden_size, patch_size**3 * out_channels, bias=True)
@@ -141,19 +213,31 @@ class FinalLayer(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """Project transformer tokens back to patch predictions."""
+        """Project transformer tokens back to patch predictions.
+
+        Parameters
+        ----------
+        x : torch.Tensor, shape ``(B, N, hidden_size)``
+            Token sequence from the last transformer block.
+        c : torch.Tensor, shape ``(B, hidden_size)``
+            Timestep conditioning vector.
+
+        Returns
+        -------
+        torch.Tensor, shape ``(B, N, patch_size³ * out_channels)``
+            Patch-space output predictions.
+        """
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
         x = modulate(self.norm_final(x), shift, scale)
         return self.linear(x)
 
 
 class FineRefiner(nn.Module):
-    """
-    Transformer-based refinement branch of PRDiT.
+    """Transformer-based residual refinement branch of PRDiT.
 
-    This branch takes patch tokens, adds positional information, and refines
-    the coarse representation with attention-based blocks. It is intended to
-    model the higher-frequency residual detail that the coarse MLP path misses.
+    Takes patch tokens from the coarse branch, adds sinusoidal positional
+    encodings, and refines the representation with :class:`DiTBlock` attention
+    blocks. Models higher-frequency residual detail that the coarse MLP misses.
     """
 
     def __init__(
@@ -172,6 +256,38 @@ class FineRefiner(nn.Module):
         mlp_ratio: float = 4.0,
         flash_attn: bool = False,
     ):
+        """Initialize the stage-2 fine refinement branch.
+
+        Parameters
+        ----------
+        in_channels : int
+            Number of input volume channels.
+        extract_patch_size : int
+            Edge length of patches produced by the coarse extractor.
+        hidden_size : int
+            Transformer hidden dimension.
+        patch_size : int
+            Output patch edge length used to compute the positional-encoding
+            grid (``grid_size = input_size // patch_size``).
+        out_channels : int
+            Number of output channels predicted per patch voxel.
+        depth : int
+            Number of :class:`DiTBlock` transformer layers.
+        num_heads : int
+            Number of self-attention heads per block.
+        num_patches : int
+            Unused; retained for API compatibility with the model registry.
+        input_size : int
+            Cubic edge length of the input/output volume.
+        stride : int, optional
+            Unused; retained for API compatibility (default ``4``).
+        padding : int, optional
+            Unused; retained for API compatibility (default ``2``).
+        mlp_ratio : float, optional
+            MLP hidden-layer expansion factor in each block (default ``4.0``).
+        flash_attn : bool, optional
+            Enable FlashAttention in every :class:`DiTBlock` (default ``False``).
+        """
         super().__init__()
         del num_patches, stride, padding
 
@@ -187,7 +303,7 @@ class FineRefiner(nn.Module):
 
         grid_size = input_size // patch_size
         pos_embed = get_normalized_3d_pos_enc(grid_size=grid_size, embed_dim=hidden_size)
-        self.register_buffer("pos_embed", pos_embed.unsqueeze(0), persistent=True)
+        self.register_buffer("pos_embed", pos_embed.unsqueeze(0), persistent=False)
 
         self.blocks = nn.ModuleList(
             [
@@ -206,7 +322,20 @@ class FineRefiner(nn.Module):
         self.patch_size = patch_size
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """Refine patch tokens with a global residual transformer."""
+        """Refine patch tokens with a global residual transformer.
+
+        Parameters
+        ----------
+        x : torch.Tensor, shape ``(B, N, in_chans * extract_patch_size³)``
+            Raw patch tokens from the coarse branch.
+        c : torch.Tensor, shape ``(B, hidden_size)``
+            Timestep conditioning vector.
+
+        Returns
+        -------
+        torch.Tensor, shape ``(B, N, patch_size³ * out_channels)``
+            Residual patch predictions from the final projection layer.
+        """
         h = self.patch_embedder(x)
         h = h + self.pos_embed
 
@@ -225,7 +354,23 @@ class FineRefiner(nn.Module):
         self,
         capture_layers: Optional[Union[int, Sequence[int]]],
     ) -> set[int]:
-        """Normalize and validate requested encoder feature layers."""
+        """Normalize and validate requested encoder feature layer indices.
+
+        Parameters
+        ----------
+        capture_layers : int, sequence of int, or None
+            Block indices to capture. ``None`` defaults to the middle block.
+
+        Returns
+        -------
+        set of int
+            Validated set of block indices in ``[0, depth)``.
+
+        Raises
+        ------
+        ValueError
+            If any index falls outside the valid range.
+        """
         if capture_layers is None:
             return {self.get_recommended_capture_layer()}
 
@@ -249,7 +394,29 @@ class FineRefiner(nn.Module):
         capture_layers: Optional[Union[int, Sequence[int]]] = None,
         include_patch_embed: bool = False,
     ) -> Tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Run the transformer branch and capture hidden token features."""
+        """Run the transformer branch and capture hidden token features.
+
+        Parameters
+        ----------
+        x : torch.Tensor, shape ``(B, N, patch_dim)``
+            Raw patch tokens from the coarse branch.
+        c : torch.Tensor, shape ``(B, hidden_size)``
+            Timestep conditioning vector.
+        capture_layers : int, sequence of int, or None, optional
+            Block indices whose outputs are stored in the returned dict.
+            ``None`` defaults to the middle block (default ``None``).
+        include_patch_embed : bool, optional
+            When ``True``, also store the post-embedding tokens under the
+            ``"patch_embed"`` key (default ``False``).
+
+        Returns
+        -------
+        h : torch.Tensor, shape ``(B, N, hidden_size)``
+            Final hidden-state after all blocks.
+        features : dict[str, torch.Tensor]
+            Captured intermediate states keyed as ``"block_i"``,
+            optionally ``"patch_embed"``, and always ``"final"``.
+        """
         requested_layers = self._normalize_capture_layers(capture_layers)
         features: dict[str, torch.Tensor] = {}
 
@@ -273,7 +440,24 @@ class FineRefiner(nn.Module):
         capture_layers: Optional[Union[int, Sequence[int]]] = None,
         include_patch_embed: bool = False,
     ) -> dict[str, torch.Tensor]:
-        """Return selected transformer hidden states for encoder-style reuse."""
+        """Return selected transformer hidden states for encoder-style reuse.
+
+        Parameters
+        ----------
+        x : torch.Tensor, shape ``(B, N, patch_dim)``
+            Raw patch tokens from the coarse branch.
+        c : torch.Tensor, shape ``(B, hidden_size)``
+            Timestep conditioning vector.
+        capture_layers : int, sequence of int, or None, optional
+            Block indices to return (default: middle block).
+        include_patch_embed : bool, optional
+            Also include the ``"patch_embed"`` key (default ``False``).
+
+        Returns
+        -------
+        dict[str, torch.Tensor]
+            Captured hidden states; see :meth:`forward_hidden_features`.
+        """
         _, features = self.forward_hidden_features(
             x,
             c,

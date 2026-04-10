@@ -1,7 +1,22 @@
+"""Multi-Scale SSIM (MS-SSIM) diversity evaluation for generated CT volumes.
+
+Computes the mean MS-SSIM across all unique pairs of generated volumes using
+MONAI's ``MultiScaleSSIMMetric``.  Lower mean MS-SSIM indicates higher sample
+diversity.
+
+Usage::
+
+    python evaluations/ms_ssim.py \\
+        --sample_dir /path/to/generated \\
+        --dataset rad_chestCT \\
+        --img_size 128
+"""
+
 import argparse
+import sys
+
 import numpy as np
 import torch
-import sys
 
 sys.path.append(".")
 sys.path.append("..")
@@ -18,6 +33,13 @@ from datasets.lidc import LIDCVolumes
 from datasets.rad_chest import RADChestCTDataset
 
 def parse_args():
+    """Build and parse the CLI argument parser for MS-SSIM evaluation.
+
+    Returns
+    -------
+    argparse.Namespace
+        Parsed CLI arguments.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=42, help="Random seed to use.")
     parser.add_argument("--sample_dir", type=str, required=True, help="Location of the samples to evaluate.")
@@ -31,6 +53,13 @@ def parse_args():
 
 
 def main(args):
+    """Run the MS-SSIM diversity evaluation loop.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments from :func:`parse_args`.
+    """
     set_determinism(seed=args.seed)
     #print_config()
 

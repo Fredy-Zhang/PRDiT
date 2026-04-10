@@ -1,7 +1,14 @@
-# Modified from OpenAI's diffusion repos
-#     GLIDE: https://github.com/openai/glide-text2im/blob/main/glide_text2im/gaussian_diffusion.py
-#     ADM:   https://github.com/openai/guided-diffusion/blob/main/guided_diffusion
-#     IDDPM: https://github.com/openai/improved-diffusion/blob/main/improved_diffusion/gaussian_diffusion.py
+"""Diffusion model factory and loader for PRDiT.
+
+Provides :func:`loading_diffusion` (the primary entry point) and
+:func:`create_diffusion` (the lower-level Gaussian-diffusion constructor).
+
+Adapted from OpenAI's diffusion repositories:
+
+- GLIDE: https://github.com/openai/glide-text2im
+- ADM:   https://github.com/openai/guided-diffusion
+- IDDPM: https://github.com/openai/improved-diffusion
+"""
 
 from . import gaussian_diffusion as gd
 from .ian_diffusion import IaNDiffusion
@@ -11,7 +18,25 @@ from .respace import SpacedDiffusion, space_timesteps
 DEFAULT_TIMESTEP_RESPACING = "1000"
 
 
-def loading_diffusion(config, rank=0):
+def loading_diffusion(config, rank: int = 0):
+    """Instantiate the correct diffusion model from the experiment config.
+
+    Selects :class:`~diffusion.ian_diffusion.IaNDiffusion` when
+    ``config.model.out_channels == 2``; otherwise builds a standard
+    :class:`SpacedDiffusion`.
+
+    Parameters
+    ----------
+    config : Config
+        Experiment configuration object.
+    rank : int, optional
+        Process rank; informational prints execute only on rank 0 (default ``0``).
+
+    Returns
+    -------
+    IaNDiffusion or SpacedDiffusion
+        Configured diffusion instance.
+    """
     out_channels = config.model.out_channels
 
     if out_channels == 1:
@@ -36,14 +61,41 @@ def loading_diffusion(config, rank=0):
 
 def create_diffusion(
     timestep_respacing,
-    noise_schedule="linear",
-    use_kl=False,
-    sigma_small=False,
-    predict_xstart=False,
-    learn_sigma=True,
-    rescale_learned_sigmas=False,
-    diffusion_steps=1000,
-):
+    noise_schedule: str = "linear",
+    use_kl: bool = False,
+    sigma_small: bool = False,
+    predict_xstart: bool = False,
+    learn_sigma: bool = True,
+    rescale_learned_sigmas: bool = False,
+    diffusion_steps: int = 1000,
+) -> "SpacedDiffusion":
+    """Construct a :class:`SpacedDiffusion` from named schedule parameters.
+
+    Parameters
+    ----------
+    timestep_respacing : str or list
+        Comma-separated step counts per schedule section, or ``"ddimN"`` for
+        DDIM fixed striding.
+    noise_schedule : str, optional
+        Beta schedule name (default ``"linear"``).
+    use_kl : bool, optional
+        Use rescaled KL loss (default ``False``).
+    sigma_small : bool, optional
+        Use fixed-small variance (default ``False``).
+    predict_xstart : bool, optional
+        Model predicts ``x_0`` instead of ``ε`` (default ``False``).
+    learn_sigma : bool, optional
+        Model outputs learned variance (default ``True``).
+    rescale_learned_sigmas : bool, optional
+        Rescale learned sigma loss (default ``False``).
+    diffusion_steps : int, optional
+        Total diffusion steps before spacing (default ``1000``).
+
+    Returns
+    -------
+    SpacedDiffusion
+        Configured diffusion instance.
+    """
     betas = gd.get_named_beta_schedule(noise_schedule, diffusion_steps)
 
     if use_kl:

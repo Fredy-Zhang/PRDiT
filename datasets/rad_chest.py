@@ -1,3 +1,26 @@
+"""RAD-ChestCT dataset loader.
+
+This module loads preprocessed RAD-ChestCT volumes referenced by split text
+files. Split entries may be absolute paths, relative paths, or filename-only
+entries such as ``trn07793.npz``.
+
+Expected preprocessed file format:
+- Compressed ``.npz`` files containing a normalized 3D volume.
+- The loader accepts either a ``volume`` key or a ``ct`` key for compatibility.
+
+The loader:
+
+- resolves split entries against the dataset directory and split-file directory
+- loads one volume at a time from disk
+- converts it to channel-first tensor format
+- downsamples to 128 or 64 when requested
+- applies optional normalization and random flip augmentation
+
+This is designed to work with outputs produced by
+``scripts/preprocess_rad_chestct.py`` and split files produced by
+``scripts/split_train_val.py``.
+"""
+
 import os
 from pathlib import Path
 
@@ -7,28 +30,6 @@ import torch.nn as nn
 import torch.utils.data
 
 from datasets.runtime import get_rank_logger, read_split_file
-
-"""RAD-ChestCT dataset loader.
-
-This module loads preprocessed RAD-ChestCT volumes referenced by split text
-files. Split entries may be absolute paths, relative paths, or filename-only
-entries such as `trn07793.npz`.
-
-Expected preprocessed file format:
-- Compressed `.npz` files containing a normalized 3D volume.
-- The loader accepts either a `volume` key or a `ct` key for compatibility.
-
-The loader:
-- resolves split entries against the dataset directory and split-file directory
-- loads one volume at a time from disk
-- converts it to channel-first tensor format
-- downsamples to 128 or 64 when requested
-- applies optional normalization and random flip augmentation
-
-This is designed to work with outputs produced by
-`scripts/preprocess_rad_chestct.py` and split files produced by
-`scripts/split_train_val.py`.
-"""
 
 
 class RADChestCTDataset(torch.utils.data.Dataset):
@@ -43,19 +44,29 @@ class RADChestCTDataset(torch.utils.data.Dataset):
         augment=False,
         rank=0,
     ):
-        """
-        RAD-ChestCT dataset loader for preprocessed volumes.
+        """Initialize the RAD-ChestCT dataset.
 
-        Args:
-            directory: Path to preprocessed `.npz` files with a `volume` key
-            mode: 'train' | 'val' — load from split file (training);
-                  'real'          — merge train.txt + val.txt (evaluation ground truth);
-                  'fake'          — scan all .npz files in directory (evaluation generated)
-            img_size: Target image size (256, 128, or 64)
-            split_file: Explicit split file path (str) for 'train'/'val', or list of paths
-                        for 'real'. Takes precedence over split_dir.
-            split_dir: Directory containing train.txt and val.txt for mode='real'.
-            rank: Process rank for distributed training
+        Parameters
+        ----------
+        directory : str or Path
+            Path to the directory containing preprocessed ``.npz`` volumes.
+        mode : str, optional
+            One of ``'train'``, ``'val'``, ``'real'``, or ``'fake'``
+            (default ``'train'``).
+        img_size : int, optional
+            Target voxel edge length — 256, 128, or 64 (default ``256``).
+        split_file : str or list of str, optional
+            Explicit split file path for ``'train'`` / ``'val'``, or list of
+            paths for ``'real'``. Takes precedence over ``split_dir``.
+        split_dir : str or Path, optional
+            Directory containing ``train.txt`` and ``val.txt``; used for
+            ``mode='real'`` when ``split_file`` is not given.
+        normalize : callable or None, optional
+            Voxel normalization applied after loading (default ``None``).
+        augment : bool, optional
+            Apply random left-right flip augmentation (default ``False``).
+        rank : int, optional
+            Process rank; only rank 0 emits progress output (default ``0``).
         """
         super().__init__()
         assert img_size in (256, 128, 64), "img_size must be 256, 128, or 64"

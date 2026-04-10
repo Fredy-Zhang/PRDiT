@@ -27,8 +27,6 @@ training:
   seed: 42                 # Random seed for reproducibility
   weight_decay: 0.0        # Weight decay for optimizer
   gradient_clip: 1.0
-  compile_model: True      # Enable torch.compile for performance optimization
-  compile_mode: "default"  # Compilation mode: 'default', 'reduce-overhead', 'max-autotune'
 
 output:
   results_dir: "results_rad"         # Directory for saving results

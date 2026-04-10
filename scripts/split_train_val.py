@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Train/validation split generation utilities.
 
 This script creates `train.txt` and `val.txt` files for the datasets used in
@@ -25,6 +23,8 @@ Typical usage:
 - Run this after preprocessing to generate `lidc_data/train.txt`,
   `lidc_data/val.txt`, `rad_data/train.txt`, or `rad_data/val.txt`.
 """
+
+from __future__ import annotations
 
 import argparse
 import random
@@ -118,8 +118,39 @@ def generate_lidc_splits(
     filename: str = "processed.nii.gz",
     dataset: str = "auto",
 ) -> tuple[Path, Path]:
-    """
-    Generate train/val split files for LIDC-IDRI or RAD-ChestCT.
+    """Generate ``train.txt`` and ``val.txt`` for LIDC-IDRI or RAD-ChestCT.
+
+    Auto-detects the dataset layout when ``dataset='auto'``: checks for
+    ``LIDC-IDRI-*`` subdirectories first, then falls back to flat ``.npz``
+    files.
+
+    Parameters
+    ----------
+    data_root : str or Path
+        Root directory of the preprocessed dataset.
+    output_dir : str or Path
+        Directory where ``train.txt`` and ``val.txt`` are written.
+    val_ratio : float or None, optional
+        Fraction of samples assigned to validation (default ``0.1``).
+        Mutually exclusive with ``val_size``.
+    val_size : int or None, optional
+        Exact number of validation samples. Mutually exclusive with
+        ``val_ratio``.
+    seed : int, optional
+        Random seed for deterministic shuffling (default ``42``).
+    filename : str, optional
+        Volume filename expected inside each ``LIDC-IDRI-*`` directory
+        (default ``"processed.nii.gz"``).
+    dataset : str, optional
+        Layout hint — ``"auto"``, ``"lidc"``, or ``"rad"``
+        (default ``"auto"``).
+
+    Returns
+    -------
+    train_txt : Path
+        Path to the written training split file.
+    val_txt : Path
+        Path to the written validation split file.
     """
     data_root = Path(data_root).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()

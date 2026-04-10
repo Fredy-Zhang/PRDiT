@@ -62,14 +62,21 @@ def unpatchify_3d(
 ) -> torch.Tensor:
     """Reconstruct a dense 3D volume from patch-space predictions.
 
-    Args:
-        x: Patch predictions with shape `[B, N, patch_size^3 * C]`.
-        out_channels: Number of output channels `C`.
-        patch_size: Edge length of each cubic patch.
-        input_size: Edge length of the reconstructed cubic volume.
+    Parameters
+    ----------
+    x : torch.Tensor
+        Patch predictions of shape ``[B, N, patch_size³ * C]``.
+    out_channels : int
+        Number of output channels *C*.
+    patch_size : int
+        Edge length of each cubic patch.
+    input_size : int
+        Edge length of the reconstructed cubic volume.
 
-    Returns:
-        Reconstructed volume of shape `[B, C, D, H, W]`.
+    Returns
+    -------
+    torch.Tensor
+        Reconstructed volume of shape ``[B, C, D, H, W]``.
     """
     if x.ndim != 3:
         raise ValueError(f"x must have shape [B, N, patch_dim], got {tuple(x.shape)}")
@@ -97,10 +104,26 @@ def get_normalized_3d_pos_enc(
     embed_dim: int,
     num_frequencies: Optional[int] = None,
 ) -> torch.Tensor:
-    """Generate normalized 3D sinusoidal position encodings.
+    """Generate normalized 3D sinusoidal positional encodings.
 
-    Coordinates are normalized to `[0, 1]` and encoded with frequency bands
-    chosen to remain stable across different spatial resolutions.
+    Coordinates are normalized to ``[0, 1]`` and encoded with log-spaced
+    frequency bands chosen to remain stable across spatial resolutions.
+
+    Parameters
+    ----------
+    grid_size : int
+        Edge length of the cubic spatial grid.
+    embed_dim : int
+        Output embedding dimension (must be divisible by 6 unless
+        ``num_frequencies`` is given).
+    num_frequencies : int or None, optional
+        Number of frequency bands per spatial axis.  Inferred from
+        ``embed_dim`` when ``None`` (default ``None``).
+
+    Returns
+    -------
+    torch.Tensor
+        Position encoding of shape ``(grid_size³, embed_dim)``.
     """
     if grid_size <= 0:
         raise ValueError(f"grid_size must be positive, got {grid_size}")
@@ -142,7 +165,20 @@ def get_normalized_3d_pos_enc(
 
 
 def get_1d_sincos_pos_embed_from_grid(embed_dim: int, pos: np.ndarray) -> np.ndarray:
-    """Generate 1D sinusoidal positional embeddings from a 1D grid."""
+    """Generate 1D sinusoidal positional embeddings from a 1D position grid.
+
+    Parameters
+    ----------
+    embed_dim : int
+        Embedding dimension (must be even).
+    pos : np.ndarray
+        1-D array of position values.
+
+    Returns
+    -------
+    np.ndarray
+        Embedding matrix of shape ``(len(pos), embed_dim)``.
+    """
     if embed_dim % 2 != 0:
         raise ValueError("embed_dim must be divisible by 2")
 
@@ -159,7 +195,20 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim: int, pos: np.ndarray) -> np.nda
 
 
 def get_3d_sincos_pos_embed_from_grid(embed_dim: int, grid: np.ndarray) -> np.ndarray:
-    """Generate 3D sinusoidal positional embeddings from a stacked 3D grid."""
+    """Generate 3D sinusoidal positional embeddings from a stacked 3D grid.
+
+    Parameters
+    ----------
+    embed_dim : int
+        Total embedding dimension (must be divisible by 3).
+    grid : np.ndarray
+        Stacked coordinate grid of shape ``[3, ...]``.
+
+    Returns
+    -------
+    np.ndarray
+        Concatenated per-axis embeddings of shape ``(N, embed_dim)``.
+    """
     if embed_dim % 3 != 0:
         raise ValueError("embed_dim must be divisible by 3")
 
@@ -175,7 +224,24 @@ def get_3d_sincos_pos_embed(
     cls_token: bool = False,
     extra_tokens: int = 0,
 ) -> np.ndarray:
-    """Generate 3D sinusoidal positional embeddings on a cubic grid."""
+    """Generate 3D sinusoidal positional embeddings on a cubic grid.
+
+    Parameters
+    ----------
+    embed_dim : int
+        Total embedding dimension (must be divisible by 3).
+    grid_size : int
+        Edge length of the cubic spatial grid.
+    cls_token : bool, optional
+        Prepend zero-filled class-token rows when ``True`` (default ``False``).
+    extra_tokens : int, optional
+        Number of extra zero-filled rows to prepend (default ``0``).
+
+    Returns
+    -------
+    np.ndarray
+        Positional embedding of shape ``(grid_size³ [+ extra_tokens], embed_dim)``.
+    """
     if grid_size <= 0:
         raise ValueError(f"grid_size must be positive, got {grid_size}")
 
@@ -199,7 +265,24 @@ def drop_path(
     training: bool = False,
     scale_by_keep: bool = True,
 ) -> torch.Tensor:
-    """Apply per-sample stochastic depth to the input tensor."""
+    """Apply per-sample stochastic depth to the input tensor.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        Input tensor of shape ``[B, ...]``.
+    drop_prob : float, optional
+        Probability of dropping each sample's residual (default ``0.0``).
+    training : bool, optional
+        Whether the model is in training mode (default ``False``).
+    scale_by_keep : bool, optional
+        Scale kept samples by ``1 / keep_prob`` when ``True`` (default ``True``).
+
+    Returns
+    -------
+    torch.Tensor
+        Input tensor with stochastic depth applied.
+    """
     if drop_prob == 0.0 or not training:
         return x
 

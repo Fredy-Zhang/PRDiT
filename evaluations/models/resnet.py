@@ -1,9 +1,17 @@
+"""3D ResNet backbone for volumetric feature extraction.
+
+Implements ResNet variants (10 / 18 / 34 / 50 / 101 / 152 / 200) adapted for
+3D medical imaging (``nn.Conv3d`` throughout).  Used as the feature extractor
+backbone in the FID and MMD evaluation scripts.
+"""
+
+import math
+from functools import partial
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-import math
-from functools import partial
 
 __all__ = [
     'ResNet', 'resnet10', 'resnet18', 'resnet34', 'resnet50', 'resnet101',

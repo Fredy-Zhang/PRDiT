@@ -1,7 +1,11 @@
-# Modified from OpenAI's diffusion repos
-#     GLIDE: https://github.com/openai/glide-text2im/blob/main/glide_text2im/gaussian_diffusion.py
-#     ADM:   https://github.com/openai/guided-diffusion/blob/main/guided_diffusion
-#     IDDPM: https://github.com/openai/improved-diffusion/blob/main/improved_diffusion/gaussian_diffusion.py
+"""Timestep resampling utilities for GaussianDiffusion.
+
+Adapted from OpenAI's diffusion repositories:
+
+- GLIDE: https://github.com/openai/glide-text2im
+- ADM:   https://github.com/openai/guided-diffusion
+- IDDPM: https://github.com/openai/improved-diffusion
+"""
 
 import numpy as np
 import torch as th
@@ -10,23 +14,26 @@ from .gaussian_diffusion import GaussianDiffusion
 
 
 def space_timesteps(num_timesteps, section_counts):
-    """
-    Create a list of timesteps to use from an original diffusion process,
-    given the number of timesteps we want to take from equally-sized portions
-    of the original process.
-    For example, if there's 300 timesteps and the section counts are [10,15,20]
-    then the first 100 timesteps are strided to be 10 timesteps, the second 100
-    are strided to be 15 timesteps, and the final 100 are strided to be 20.
-    If the stride is a string starting with "ddim", then the fixed striding
-    from the DDIM paper is used, and only one section is allowed.
-    :param num_timesteps: the number of diffusion steps in the original
-                          process to divide up.
-    :param section_counts: either a list of numbers, or a string containing
-                           comma-separated numbers, indicating the step count
-                           per section. As a special case, use "ddimN" where N
-                           is a number of steps to use the striding from the
-                           DDIM paper.
-    :return: a set of diffusion steps from the original process to use.
+    """Create a subset of timesteps by striding the original diffusion schedule.
+
+    Divides the full schedule into equally-sized sections and strides each
+    section to the requested count.  For example, with 300 total steps and
+    section counts ``[10, 15, 20]``, the first 100 steps become 10, the next
+    100 become 15, and the last 100 become 20.
+
+    Parameters
+    ----------
+    num_timesteps : int
+        Total number of diffusion steps in the original process.
+    section_counts : list of int or str
+        Either a list of integers (one per section), a comma-separated string
+        of integers, or the special form ``"ddimN"`` to use the DDIM fixed
+        stride for exactly *N* steps.
+
+    Returns
+    -------
+    set of int
+        Subset of diffusion step indices from the original schedule.
     """
     if isinstance(section_counts, str):
         if section_counts.startswith("ddim"):
@@ -63,11 +70,14 @@ def space_timesteps(num_timesteps, section_counts):
 
 
 class SpacedDiffusion(GaussianDiffusion):
-    """
-    A diffusion process which can skip steps in a base diffusion process.
-    :param use_timesteps: a collection (sequence or set) of timesteps from the
-                          original diffusion process to retain.
-    :param kwargs: the kwargs to create the base diffusion process.
+    """Diffusion process that skips steps from a base diffusion schedule.
+
+    Parameters
+    ----------
+    use_timesteps : collection of int
+        Subset of timestep indices from the original process to retain.
+    **kwargs
+        Keyword arguments forwarded to :class:`GaussianDiffusion`.
     """
 
     def __init__(self, use_timesteps, **kwargs):

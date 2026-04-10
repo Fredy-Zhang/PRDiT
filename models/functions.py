@@ -38,20 +38,26 @@ class MlpDenoiserRMS(nn.Module):
     When `out_channels == 2`, the module reconstructs dense 3D volumes and
     returns them concatenated as `[noise, image]` along the channel dimension.
 
-    Note:
-        `hidden_size` here refers to the coarse patch-token width
-        (`in_channels * extract_patch_size**3`), not the transformer hidden
-        size used by the fine branch.
-        `swiglu_mlp` is retained only for API compatibility with related code.
+    Notes
+    -----
+    ``hidden_size`` here refers to the coarse patch-token width
+    (``in_channels * extract_patch_size**3``), not the transformer hidden size.
+    ``swiglu_mlp`` is retained only for API compatibility.
 
-    Args:
-        input_size: Cubic edge length of the target output volume.
-        hidden_size: Patch-token feature dimension used by the coarse MLP.
-        patch_size: Edge length of each cubic output patch.
-        out_channels: Number of output channels. A value of `2` enables the
-            dedicated image/noise dual-head behavior.
-        mlp_ratio: Expansion ratio used inside the SwiGLU blocks.
-        swiglu_mlp: Retained for constructor compatibility with related modules.
+    Parameters
+    ----------
+    input_size : int
+        Cubic edge length of the target output volume.
+    hidden_size : int
+        Patch-token feature dimension.
+    patch_size : int
+        Edge length of each cubic output patch.
+    out_channels : int
+        Number of output channels; ``2`` enables the image/noise dual-head.
+    mlp_ratio : float, optional
+        Expansion ratio inside the SwiGLU blocks (default ``1.0``).
+    swiglu_mlp : bool, optional
+        Retained for constructor compatibility (default ``False``).
     """
 
     def __init__(
@@ -112,14 +118,18 @@ class MlpDenoiserRMS(nn.Module):
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         """Denoise a patch-token sequence with timestep-conditioned modulation.
 
-        Args:
-            x: Patch tokens of shape `[B, N, token_dim]`.
-            c: Coarse-branch timestep conditioning of shape `[B, token_dim]`.
+        Parameters
+        ----------
+        x : torch.Tensor
+            Patch tokens of shape ``[B, N, token_dim]``.
+        c : torch.Tensor
+            Coarse-branch timestep conditioning of shape ``[B, token_dim]``.
 
-        Returns:
-            If `out_channels == 2`, a dense 3D tensor of shape
-            `[B, 2, D, H, W]` ordered as `[noise, image]`. Otherwise, a patch
-            prediction tensor of shape `[B, N, patch_size^3 * out_channels]`.
+        Returns
+        -------
+        torch.Tensor
+            For ``out_channels == 2``, dense volume ``[B, 2, D, H, W]`` ordered
+            as ``[noise, image]``; otherwise patches ``[B, N, patch_size³ * C]``.
         """
         shift1, scale1, shift2, scale2, shift, scale = self.adaLN_modulation(c).chunk(6, dim=1)
 
@@ -160,13 +170,16 @@ class FinalLayerRMS(nn.Module):
     If `input_size` is provided, the dual-head outputs are unpatchified back to
     dense 3D volumes before being returned.
 
-    Args:
-        hidden_size: Transformer token width entering the final projection.
-        patch_size: Edge length of each cubic output patch.
-        out_channels: Number of output channels. A value of `2` enables the
-            explicit image/noise dual-head projection.
-        input_size: Optional cubic edge length used to reconstruct dense output
-            volumes from patch predictions.
+    Parameters
+    ----------
+    hidden_size : int
+        Transformer token width entering the final projection.
+    patch_size : int
+        Edge length of each cubic output patch.
+    out_channels : int
+        Number of output channels; ``2`` enables the image/noise dual-head.
+    input_size : int or None, optional
+        Cubic edge length for reconstructing dense output volumes from patches.
     """
 
     def __init__(self, hidden_size: int, patch_size: int, out_channels: int, input_size: int = None):
@@ -200,16 +213,19 @@ class FinalLayerRMS(nn.Module):
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         """Project hidden tokens into patch predictions or dense 3D outputs.
 
-        Args:
-            x: Hidden token tensor of shape `[B, N, hidden_size]`.
-            c: Conditioning vector of shape `[B, hidden_size]`.
+        Parameters
+        ----------
+        x : torch.Tensor
+            Hidden tokens of shape ``[B, N, hidden_size]``.
+        c : torch.Tensor
+            Conditioning vector of shape ``[B, hidden_size]``.
 
-        Returns:
-            For dual-head mode with `input_size` set, a dense volume tensor of
-            shape `[B, 2, D, H, W]` ordered as `[noise, image]`. For dual-head
-            mode without `input_size`, patch predictions of shape
-            `[B, N, 2 * patch_size^3]`. For single-head mode, a patch tensor of
-            shape `[B, N, patch_size^3 * out_channels]`.
+        Returns
+        -------
+        torch.Tensor
+            Dual-head with ``input_size``: dense ``[B, 2, D, H, W]`` as
+            ``[noise, image]``.  Dual-head without ``input_size``: patches
+            ``[B, N, 2·patch_size³]``.  Single-head: ``[B, N, C·patch_size³]``.
         """
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
 
@@ -237,22 +253,31 @@ class FinalLayerRMS(nn.Module):
         return self.linear(modulate(self.norm_image(x), shift, scale))
 
 class CoarseDenoiserRMS(nn.Module):
-    """
-    Coarse denoising path using the RMS/image-noise patch MLP variant.
+    """Coarse denoising path using the RMS dual-head patch MLP variant.
 
-    The RMS coarse branch first extracts raw 3D patches from the input volume,
-    then applies `MlpDenoiserRMS` to predict separate noise and image outputs.
+    Extracts raw 3D patches from the input volume and applies
+    :class:`MlpDenoiserRMS` to predict separate noise and image outputs.
 
-    Args:
-        in_channels: Number of input channels in the volume.
-        extract_patch_size: Edge length of the patches extracted from the input.
-        patch_size: Edge length of each output patch predicted by the coarse branch.
-        out_channels: Number of channels predicted per voxel.
-        input_size: Edge length of the input/output cubic volume.
-        stride: Patch extraction stride.
-        padding: Reflection padding used before extraction.
-        mlp_ratio: SwiGLU expansion ratio inside the coarse MLP.
-        swiglu_mlp: Retained compatibility flag for RMS coarse MLP variants.
+    Parameters
+    ----------
+    in_channels : int
+        Number of input channels in the volume.
+    extract_patch_size : int
+        Edge length of the patches extracted from the input.
+    patch_size : int
+        Edge length of each output patch.
+    out_channels : int
+        Number of channels predicted per voxel.
+    input_size : int
+        Edge length of the cubic input/output volume.
+    stride : int, optional
+        Patch extraction stride (default ``4``).
+    padding : int, optional
+        Reflection padding used before extraction (default ``2``).
+    mlp_ratio : float, optional
+        SwiGLU expansion ratio (default ``1.0``).
+    swiglu_mlp : bool, optional
+        Retained for compatibility (default ``True``).
     """
     
     def __init__(self,
@@ -297,17 +322,22 @@ class CoarseDenoiserRMS(nn.Module):
                 x: torch.Tensor, 
                 c: torch.Tensor, 
                 return_patches: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """
-        Run the coarse PRDiT branch on an input volume.
-        
-        Args:
-            x: Input volume `[B, C, D, H, W]`.
-            c: Coarse-branch timestep conditioning `[B, patch_token_dim]`.
-            return_patches: Whether to also return the extracted raw patches.
-            
-        Returns:
-            The coarse output volume, or `(input_patches, coarse_output)` when
-            `return_patches=True`.
+        """Run the RMS coarse branch on an input volume.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input volume of shape ``[B, C, D, H, W]``.
+        c : torch.Tensor
+            Coarse-branch timestep conditioning of shape ``[B, patch_token_dim]``.
+        return_patches : bool, optional
+            Also return the raw extracted patches when ``True`` (default ``False``).
+
+        Returns
+        -------
+        torch.Tensor or tuple of torch.Tensor
+            Coarse output volume, or ``(input_patches, coarse_output)`` when
+            ``return_patches=True``.
         """
         # Extract patches from input volume
         patches = self.patch_extractor(x)  # [B, N, C * extract_patch_size^3]

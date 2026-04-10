@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """RAD-ChestCT preprocessing script.
 
 This script converts raw RAD-ChestCT `.npz` files into training-ready preprocessed
@@ -26,6 +24,8 @@ Typical usage:
 - Preprocess a directory of raw RAD-ChestCT files before generating `train.txt`
   and `val.txt` with `scripts/split_train_val.py`.
 """
+
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
@@ -66,16 +66,24 @@ def preprocess_volume(
     target_shape: tuple[int, int, int],
     upper_quantile: float,
 ) -> np.ndarray:
-    """
-    Preprocess a RAD-ChestCT volume into a normalized [0,1] array.
+    """Preprocess a RAD-ChestCT volume into a normalized ``[0, 1]`` array.
 
-    Steps:
-    1. Convert to float32
-    2. Clip HU to [-1000, 1000]
-    3. Center crop to `(256, 256, 256)`
-    4. Downsample to the requested target shape if needed
-    5. Optionally clip the upper intensity tail
-    6. Normalize to [0,1]
+    Parameters
+    ----------
+    volume : numpy.ndarray
+        Raw CT array (arbitrary dtype); HU values expected.
+    target_shape : tuple of int
+        ``(D, H, W)`` of the output volume.  A center crop to
+        ``(256, 256, 256)`` is always applied first, followed by
+        downsampling when ``target_shape`` differs.
+    upper_quantile : float
+        Fraction in ``(0, 1]`` used to clip upper-tail outliers before
+        normalization.  Pass ``1.0`` to skip clipping.
+
+    Returns
+    -------
+    numpy.ndarray, shape target_shape, dtype float32
+        Volume with values in ``[0, 1]``.
     """
     volume = np.asarray(volume, dtype=np.float32)
     volume = np.clip(volume, LOW_HU, HIGH_HU)

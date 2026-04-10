@@ -1,7 +1,15 @@
+"""3D ResNet model factory for FID / MMD evaluation.
+
+Constructs a 3D ResNet of the requested depth and optionally loads pretrained
+weights for feature extraction.  Supported depths: 10, 18, 34, 50, 101, 152,
+200.
+"""
+
+import os
+import sys
+
 import torch
 from torch import nn
-import sys
-import os
 
 # Add the 'eval' directory to the Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -11,6 +19,25 @@ from eval.models import resnet
 
 
 def generate_model(opt):
+    """Construct a 3D ResNet and optionally load pretrained weights.
+
+    Parameters
+    ----------
+    opt : argparse.Namespace
+        Must expose ``model`` (str), ``model_depth`` (int),
+        ``input_W/H/D`` (int), ``resnet_shortcut`` (str),
+        ``no_cuda`` (bool), ``n_seg_classes`` (int),
+        ``gpu_id`` (int), ``phase`` (str), ``pretrain_path`` (str),
+        and ``new_layer_names`` (list of str).
+
+    Returns
+    -------
+    model : torch.nn.Module
+        Constructed (and optionally pretrained) ResNet.
+    parameters : dict or generator
+        ``{'base_parameters': …, 'new_parameters': …}`` when a pretrained
+        checkpoint is loaded; ``model.parameters()`` otherwise.
+    """
     assert opt.model in ['resnet']
 
     if opt.model == 'resnet':

@@ -14,16 +14,25 @@ from models.utils import drop_path
 
 class Attention(nn.Module):
     """Multi-head self-attention with optional flash-attention execution.
-    
-    Args:
-        dim: Input and output feature dimension.
-        num_heads: Number of attention heads.
-        qkv_bias: Whether to use bias in QKV projections.
-        qk_norm: Whether to normalize query and key heads.
-        attn_drop: Dropout on attention weights.
-        proj_drop: Dropout on the output projection.
-        norm_layer: Normalization applied to query and key heads.
-        use_flash_attention: Whether to use `scaled_dot_product_attention`.
+
+    Parameters
+    ----------
+    dim : int
+        Input and output feature dimension.
+    num_heads : int, optional
+        Number of attention heads (default ``8``).
+    qkv_bias : bool, optional
+        Use bias in QKV projections (default ``False``).
+    qk_norm : bool, optional
+        Normalize query and key heads (default ``False``).
+    attn_drop : float, optional
+        Dropout probability on attention weights (default ``0.``).
+    proj_drop : float, optional
+        Dropout probability on the output projection (default ``0.``).
+    norm_layer : nn.Module, optional
+        Normalization applied to query and key heads (default ``nn.LayerNorm``).
+    use_flash_attention : bool, optional
+        Use ``F.scaled_dot_product_attention`` (default ``False``).
     """
     def __init__(
             self,
@@ -229,15 +238,23 @@ class MLPWithSkip(nn.Module):
 
 class CrossAttention(nn.Module):
     """Bidirectional cross-attention between latent tokens and patch tokens.
-    
-    Args:
-        dim_lat: Latent token dimension.
-        dim_pat: Patch token dimension.
-        dim_attn: Internal attention dimension.
-        num_heads: Number of attention heads.
-        rv_bias: Whether to use bias in attention projections.
-        attn_drop: Dropout on attention weights.
-        proj_drop: Dropout on output projections.
+
+    Parameters
+    ----------
+    dim_lat : int
+        Latent token dimension.
+    dim_pat : int
+        Patch token dimension.
+    dim_attn : int
+        Internal attention dimension (must be divisible by ``num_heads``).
+    num_heads : int, optional
+        Number of attention heads (default ``8``).
+    rv_bias : bool, optional
+        Use bias in attention projections (default ``False``).
+    attn_drop : float, optional
+        Dropout probability on attention weights (default ``0.``).
+    proj_drop : float, optional
+        Dropout probability on output projections (default ``0.``).
     """
     def __init__(self, dim_lat, dim_pat, dim_attn, num_heads=8, rv_bias=False, attn_drop=0., proj_drop=0.):
         super().__init__()

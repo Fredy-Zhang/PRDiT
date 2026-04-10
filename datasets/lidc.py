@@ -1,23 +1,14 @@
-import torch
-import torch.nn as nn
-import torch.utils.data
-import os
-from pathlib import Path
-import nibabel
-import numpy as np
-import logging
-import tqdm
-from datasets.utils import ColoredFormatter
-
 """LIDC dataset loader.
 
 This module loads preprocessed LIDC-IDRI volumes referenced by a split text
 file. Each split entry may be:
-- an absolute path to `processed.nii.gz`
+
+- an absolute path to ``processed.nii.gz``
 - a relative path
 - a filename-like path resolvable from the configured dataset directory
 
 The loader:
+
 - resolves split entries robustly
 - loads NIfTI volumes into memory
 - converts them into channel-first tensors
@@ -25,8 +16,21 @@ The loader:
 - applies optional normalization and lightweight augmentation
 
 This matches the repository workflow where preprocessing happens first and
-training consumes paths listed in `train.txt` and `val.txt`.
+training consumes paths listed in ``train.txt`` and ``val.txt``.
 """
+
+import logging
+import os
+from pathlib import Path
+
+import nibabel
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.utils.data
+import tqdm
+
+from datasets.utils import ColoredFormatter
 
 
 class LIDCVolumes(torch.utils.data.Dataset):
@@ -41,17 +45,32 @@ class LIDCVolumes(torch.utils.data.Dataset):
         rank=0,
         augment=False,
     ):
-        """
-        Args:
-            directory: Root directory for resolving relative split entries,
-                       or directory of generated volumes for mode='fake'
-            split_file: Path to the txt file for mode='train'/'val', or list
-                        of paths to merge for mode='real'. Takes precedence over split_dir.
-            mode: 'train' | 'val' — load from split file (training);
-                  'real'          — merge train.txt + val.txt (evaluation ground truth);
-                  'fake'          — scan all .nii.gz files in directory (evaluation generated)
-            img_size: Target image size (64, 128, or 256)
-            split_dir: Directory containing train.txt and val.txt for mode='real'.
+        """Initialize the LIDC-IDRI dataset.
+
+        Parameters
+        ----------
+        directory : str or Path
+            Root directory for resolving relative split entries, or the
+            directory of generated volumes when ``mode='fake'``.
+        split_file : str or list of str, optional
+            Path to the ``.txt`` split file for ``mode='train'`` / ``'val'``,
+            or a list of paths to merge for ``mode='real'``.
+            Takes precedence over ``split_dir``.
+        normalize : callable or None, optional
+            Voxel normalization applied after loading; ``None`` defaults to
+            ``lambda x: 2*x - 1``.
+        mode : str, optional
+            One of ``'train'``, ``'val'``, ``'real'``, or ``'fake'``
+            (default ``'train'``).
+        img_size : int, optional
+            Target voxel edge length — 64, 128, or 256 (default ``256``).
+        split_dir : str or Path, optional
+            Directory containing ``train.txt`` and ``val.txt`` used when
+            ``mode='real'`` and ``split_file`` is not given.
+        rank : int, optional
+            Process rank; only rank 0 emits progress output (default ``0``).
+        augment : bool, optional
+            Apply random left-right flip augmentation (default ``False``).
         """
         super().__init__()
 

@@ -1,8 +1,18 @@
-# Modified from OpenAI's diffusion repos
-#     GLIDE: https://github.com/openai/glide-text2im/blob/main/glide_text2im/gaussian_diffusion.py
-#     ADM:   https://github.com/openai/guided-diffusion/blob/main/guided_diffusion
-#     IDDPM: https://github.com/openai/improved-diffusion/blob/main/improved_diffusion/gaussian_diffusion.py
+"""Gaussian diffusion utilities for PRDiT.
 
+Implements the standard DDPM training and sampling loop, including:
+
+- beta schedules (linear, cosine, warmup variants)
+- forward process (``q_sample``)
+- reverse process (``p_sample``, ``p_sample_loop``)
+- variational lower bound and MSE training losses
+
+Adapted from OpenAI's diffusion repositories:
+
+- GLIDE: https://github.com/openai/glide-text2im
+- ADM:   https://github.com/openai/guided-diffusion
+- IDDPM: https://github.com/openai/improved-diffusion
+"""
 
 import math
 

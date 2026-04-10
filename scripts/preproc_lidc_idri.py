@@ -1,22 +1,21 @@
 """LIDC-IDRI preprocessing script.
 
-This script converts the original LIDC-IDRI DICOM studies into NIfTI files and
-then produces one normalized `processed.nii.gz` volume for each case.
+Converts the original LIDC-IDRI DICOM studies into NIfTI files and produces
+one normalized ``processed.nii.gz`` volume per case.
 
 Pipeline summary:
-- convert each case directory from DICOM to NIfTI with `dicom2nifti`
-- resample to isotropic 1 mm spacing
-- center crop to `256 x 256 x 256`
-- clip HU values, suppress upper-tail outliers, and normalize to `[0, 1]`
-- save the final volume as `processed.nii.gz`
 
-Provenance:
-- this script is adapted from the preprocessing utility referenced by the
-  official WDM repository (`pfriedri/wdm-3d`), which documents the same
-  `preproc_lidc-idri.py` workflow for preparing LIDC-IDRI from downloaded DICOM
-  data
-  (https://github.com/pfriedri/wdm-3d).
+1. Convert each case directory from DICOM to NIfTI with ``dicom2nifti``.
+2. Resample to isotropic 1 mm spacing.
+3. Center crop to ``256 × 256 × 256``.
+4. Clip HU values, suppress upper-tail outliers, and normalize to ``[0, 1]``.
+5. Save the final volume as ``processed.nii.gz``.
+
+Adapted from the preprocessing utility in the WDM repository
+(``pfriedri/wdm-3d``) which documents the same ``preproc_lidc-idri.py``
+workflow for DICOM-sourced LIDC-IDRI data.
 """
+
 import argparse
 import os
 import shutil
@@ -27,7 +26,15 @@ from scipy.ndimage import zoom
 
 
 def preprocess_nifti(input_path, output_path):
-    """Convert one intermediate NIfTI scan into the final normalized training volume."""
+    """Convert one intermediate NIfTI scan into the final normalized training volume.
+
+    Parameters
+    ----------
+    input_path : str
+        Path to the intermediate NIfTI file produced by ``dicom2nifti``.
+    output_path : str
+        Destination path for the normalized ``processed.nii.gz`` volume.
+    """
     # Load the Nifti image
     print('Process image: {}'.format(input_path))
     img = nib.load(input_path)

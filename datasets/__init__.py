@@ -1,22 +1,22 @@
-import os
-
 """Dataset factory for voxel-based training datasets.
 
 This module is the main entry point used by training code to construct dataset
 instances from configuration values.
 
 It currently supports:
-- `lidc` for preprocessed LIDC-IDRI NIfTI volumes
-- `rad_chestct` for preprocessed RAD-ChestCT `.npz` volumes
+- ``lidc`` for preprocessed LIDC-IDRI NIfTI volumes
+- ``rad_chestct`` for preprocessed RAD-ChestCT ``.npz`` volumes
 
 The factory expects:
-- `dataroot` pointing to the preprocessed dataset directory
-- `train_list` and `val_list` pointing to split text files
-- `roi_size` describing the target training resolution
+- ``dataroot`` pointing to the preprocessed dataset directory
+- ``train_list`` and ``val_list`` pointing to split text files
+- ``roi_size`` describing the target training resolution
 
-Based on `task`, it dispatches to the appropriate dataset loader and applies
+Based on ``task``, it dispatches to the appropriate dataset loader and applies
 optional normalization and augmentation settings consistently.
 """
+
+import os
 
 from datasets.lidc import LIDCVolumes
 from datasets.rad_chest import RADChestCTDataset
@@ -33,21 +33,35 @@ def get_voxel_dataset(
     normalize=False,
     rank=0,
 ):
-    """
-    Get a voxel dataset.
-    
-    Args:
-        dataroot: Directory containing the preprocessed dataset files
-        task: Dataset type ("lidc" | "rad_chestct")
-        roi_size: Volume size (height, width, depth)
-        data_type: Split type ("train", "val")
-        train_list: Path to the training split txt file
-        val_list: Path to the validation split txt file
-        augment: Enable augmentation
-        normalize: Apply normalization (2*x - 1)
-    
-    Returns:
-        Dataset instance
+    """Construct a voxel dataset for the requested task and split.
+
+    Parameters
+    ----------
+    dataroot : str
+        Directory containing the preprocessed dataset files.
+    task : str, optional
+        Dataset type — ``"lidc"`` or ``"rad_chestct"`` (default ``"rad_chestct"``).
+    roi_size : tuple of int, optional
+        Volume edge length ``(H, W, D)``; only the first element is used
+        (default ``(128, 128, 128)``).
+    data_type : str, optional
+        Split — ``"train"`` or ``"val"`` (default ``"train"``).
+    train_list : str or None
+        Path to the training split ``.txt`` file.
+    val_list : str or None
+        Path to the validation split ``.txt`` file.
+    augment : bool, optional
+        Enable random flip augmentation (default ``False``).
+    normalize : bool, optional
+        Apply ``2*x - 1`` voxel normalization (default ``False``).
+    rank : int, optional
+        Process rank for distributed training; controls progress output
+        (default ``0``).
+
+    Returns
+    -------
+    torch.utils.data.Dataset
+        Constructed dataset instance for the requested task and split.
     """
     if task not in {"lidc", "rad_chestct"}:
         raise ValueError("Invalid task. Supported tasks: 'lidc' and 'rad_chestct'.")

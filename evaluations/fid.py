@@ -1,10 +1,29 @@
+"""3D Fréchet Inception Distance (FID) computation for CT volumes.
+
+Extracts deep features from real and generated volumes using a pretrained
+3D ResNet-50 backbone, then computes the Fréchet distance between the two
+feature distributions.
+
+Usage::
+
+    python evaluations/fid.py \\
+        --dataset rad_chestCT \\
+        --img_size 128 \\
+        --data_root_real /path/to/real \\
+        --data_root_fake /path/to/fake \\
+        --pretrain_path resnet_50.pth \\
+        --path_to_activations /tmp/acts \\
+        --num_samples 1000
+"""
+
+import argparse
+import os
+import random
+import sys
+
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-import os
-import sys
-import argparse
-import random
 
 sys.path.append(".")
 sys.path.append("..")
@@ -22,6 +41,18 @@ from datasets.lidc import LIDCVolumes
 
 
 def get_feature_extractor(sets):
+    """Load a 3D ResNet-50 feature extractor from a pretrained checkpoint.
+
+    Parameters
+    ----------
+    sets : argparse.Namespace
+        CLI options; must expose ``pretrain_path`` and ``dims``.
+
+    Returns
+    -------
+    torch.nn.Module
+        Feature extractor in eval mode.
+    """
     model, _ = generate_model(sets)
     checkpoint = torch.load(sets.pretrain_path, map_location='cpu')
     model.load_state_dict(checkpoint['state_dict'], strict=False)
@@ -32,6 +63,24 @@ def get_feature_extractor(sets):
 
 
 def get_activations(model, data_loader, sets, device):
+    """Extract feature activations from ``data_loader`` up to ``sets.num_samples``.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Feature extractor (eval mode).
+    data_loader : torch.utils.data.DataLoader
+        Yields batches of volumes; accepts ``dict``, ``tuple``, or raw tensors.
+    sets : argparse.Namespace
+        Must expose ``num_samples`` (int) and ``dims`` (int).
+    device : torch.device
+        Device on which inference runs.
+
+    Returns
+    -------
+    numpy.ndarray, shape (N, dims)
+        Collected feature vectors (float64).
+    """
     activs = np.zeros((sets.num_samples, sets.dims), dtype=np.float64)
     idx = 0
     first_batch = True
@@ -71,9 +120,29 @@ def get_activations(model, data_loader, sets, device):
 
 
 def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
-    """
-    Numpy implementation of the Frechet Distance.
-    d^2 = ||mu1 - mu2||^2 + Tr(C1 + C2 - 2*sqrt(C1*C2))
+    """Compute the Fréchet distance between two multivariate Gaussians.
+
+    Implements:
+    ``d² = ‖μ₁ − μ₂‖² + Tr(Σ₁ + Σ₂ − 2·√(Σ₁·Σ₂))``
+
+    Parameters
+    ----------
+    mu1 : array-like, shape (d,)
+        Mean of the first distribution (real features).
+    sigma1 : array-like, shape (d, d)
+        Covariance of the first distribution.
+    mu2 : array-like, shape (d,)
+        Mean of the second distribution (generated features).
+    sigma2 : array-like, shape (d, d)
+        Covariance of the second distribution.
+    eps : float, optional
+        Small regularisation added to the diagonal when the product of
+        covariances is singular (default ``1e-6``).
+
+    Returns
+    -------
+    float
+        Fréchet distance (lower is better; 0 means identical distributions).
     """
     mu1 = np.atleast_1d(mu1)
     mu2 = np.atleast_1d(mu2)
@@ -101,6 +170,20 @@ def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
 
 
 def process_feature_vecs(activations):
+    """Compute the sample mean and covariance from a feature matrix.
+
+    Parameters
+    ----------
+    activations : numpy.ndarray, shape (N, d)
+        Feature vectors collected from the dataset.
+
+    Returns
+    -------
+    mu : numpy.ndarray, shape (d,)
+        Sample mean.
+    sigma : numpy.ndarray, shape (d, d)
+        Sample covariance.
+    """
     mu = np.mean(activations, axis=0)
     sigma = np.cov(activations, rowvar=False)
     return mu, sigma
@@ -156,6 +239,13 @@ def check_data_range_compatibility(real_data, fake_data, dataset_name, num_sampl
 
 
 def set_randomness(seed):
+    """Fix all global random seeds for reproducible evaluation.
+
+    Parameters
+    ----------
+    seed : int
+        Seed applied to PyTorch, NumPy, Python's ``random``, and CUDA.
+    """
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -163,6 +253,13 @@ def set_randomness(seed):
 
 
 def parse_opts():
+    """Build and parse the CLI argument parser for 3D FID evaluation.
+
+    Returns
+    -------
+    argparse.Namespace
+        Parsed CLI arguments.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', required=True, type=str, help='rad_chestCT | lidc-idri')
     parser.add_argument('--img_size', required=True, type=int, help='Image size')

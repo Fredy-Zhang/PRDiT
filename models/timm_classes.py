@@ -1,9 +1,9 @@
-"""
-This module contains classes adapted from the timm (PyTorch Image Models) package.
+"""Patch-embedding classes adapted from the timm package.
+
 Original source: https://github.com/huggingface/pytorch-image-models
 
-These classes provide various patch embedding implementations used in Vision Transformers
-and related architectures.
+Provides overlapping and non-overlapping 2D patch embedding layers used in
+Vision Transformer (ViT) and related architectures.
 """
 
 import torch
@@ -11,16 +11,18 @@ import torch.nn as nn
 from timm.layers import DropPath, to_2tuple, trunc_normal_, _assert
 
 class OverlapPatchEmbed(nn.Module):
-    """ Image to Patch Embedding with overlapping patches
-    
-    Originally from timm (PyTorch Image Models) package.
-    This class implements overlapping patch embedding used in models like PVT (Pyramid Vision Transformer).
-    
-    Args:
-        patch_size (int): Patch size for embedding. Default: 7
-        stride (int): Stride size for the convolution. Default: 4
-        in_chans (int): Number of input channels. Default: 3
-        embed_dim (int): Embedding dimension. Default: 768
+    """Image-to-patch embedding with overlapping patches (from timm / PVT).
+
+    Parameters
+    ----------
+    patch_size : int, optional
+        Patch size for the strided convolution (default ``7``).
+    stride : int, optional
+        Convolution stride (default ``4``).
+    in_chans : int, optional
+        Number of input channels (default ``3``).
+    embed_dim : int, optional
+        Output embedding dimension (default ``768``).
     """
     def __init__(self, patch_size=7, stride=4, in_chans=3, embed_dim=768):
         super().__init__()
@@ -39,17 +41,20 @@ class OverlapPatchEmbed(nn.Module):
         return x
 
 class PatchEmbed(nn.Module):
-    """ Image to Patch Embedding
-    
-    Originally from timm (PyTorch Image Models) package.
-    This class implements the patch embedding layer used in Vision Transformer (ViT) and related models.
-    
-    Args:
-        img_size (int): Input image size. Default: 224
-        patch_size (int): Patch size for embedding. Default: 16
-        in_chans (int): Number of input channels. Default: 3
-        embed_dim (int): Embedding dimension. Default: 768
-        multi_conv (bool): Whether to use multiple convolutions for patch embedding. Default: False
+    """Standard image-to-patch embedding from ViT (from timm).
+
+    Parameters
+    ----------
+    img_size : int, optional
+        Input image size (default ``224``).
+    patch_size : int, optional
+        Patch size for the embedding convolution (default ``16``).
+    in_chans : int, optional
+        Number of input channels (default ``3``).
+    embed_dim : int, optional
+        Output embedding dimension (default ``768``).
+    multi_conv : bool, optional
+        Use multiple convolutions for patch embedding (default ``False``).
     """
 
     def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768, multi_conv=False):

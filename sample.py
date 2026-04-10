@@ -34,8 +34,12 @@ def sample(args: argparse.Namespace) -> None:
     volumes in batches of ``args.num_samples``, saving each batch to
     ``args.output_dir``.
 
-    Args:
-        args: Parsed command-line arguments; see :func:`get_argument_parser`.
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments; see :func:`get_argument_parser`.
+        Required fields: ``config``, ``ckpt``, ``num_samples``,
+        ``total_samples``, ``num_sampling_steps``, ``output_dir``, ``new``.
     """
     config = load_config(os.path.join("configs", "global", args.config))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

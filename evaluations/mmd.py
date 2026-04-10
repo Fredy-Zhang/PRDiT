@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+"""3D Maximum Mean Discrepancy (MMD) computation for CT volumes.
+
+Extracts deep features from real and generated volumes using a pretrained
+3D ResNet-50 backbone, then computes the MMD with an RBF kernel whose
+bandwidth is chosen by the median heuristic.
+
+Usage::
+
+    python evaluations/mmd.py \\
+        --dataset rad_chestCT \\
+        --img_size 128 \\
+        --data_root_real /path/to/real \\
+        --data_root_fake /path/to/fake \\
+        --pretrain_path resnet_50.pth \\
+        --path_to_activations /tmp/acts \\
+        --num_samples 1000
+"""
+
 import os
 import sys
 import random
@@ -23,6 +41,13 @@ from fid import check_data_range_compatibility, set_randomness
 
 
 def parse_opts():
+    """Build and parse the CLI argument parser for 3D MMD evaluation.
+
+    Returns
+    -------
+    argparse.Namespace
+        Parsed CLI arguments.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', required=True, type=str, help='rad_chestCT | lidc-idri')
     parser.add_argument('--data_root_real', required=True, type=str)
@@ -53,6 +78,18 @@ def parse_opts():
 
 
 def get_feature_extractor(sets):
+    """Load a 3D ResNet-50 feature extractor from a pretrained checkpoint.
+
+    Parameters
+    ----------
+    sets : argparse.Namespace
+        CLI options; must expose ``pretrain_path``.
+
+    Returns
+    -------
+    torch.nn.Module
+        Feature extractor in eval mode.
+    """
     model, _ = generate_model(sets)
     ckpt = torch.load(sets.pretrain_path, map_location='cpu')
     model.load_state_dict(ckpt['state_dict'], strict=False)
@@ -62,6 +99,24 @@ def get_feature_extractor(sets):
 
 
 def get_activations(model, loader, sets, device):
+    """Extract feature activations from ``loader`` up to ``sets.num_samples``.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Feature extractor (eval mode).
+    loader : torch.utils.data.DataLoader
+        Yields batches of volumes; accepts ``dict``, ``tuple``, or raw tensors.
+    sets : argparse.Namespace
+        Must expose ``num_samples`` (int) and ``dims`` (int).
+    device : torch.device
+        Device on which inference runs.
+
+    Returns
+    -------
+    numpy.ndarray, shape (N, dims)
+        Collected feature vectors (float64).
+    """
     activs = np.zeros((sets.num_samples, sets.dims), dtype=np.float64)
     idx = 0
     first_batch = True
@@ -101,7 +156,22 @@ def get_activations(model, loader, sets, device):
 
 
 def compute_mmd(x: torch.Tensor, y: torch.Tensor, gamma: float) -> torch.Tensor:
-    """Compute MMD with RBF kernel."""
+    """Compute the squared MMD between two feature sets using an RBF kernel.
+
+    Parameters
+    ----------
+    x : torch.Tensor, shape (N, d)
+        Features from the real distribution.
+    y : torch.Tensor, shape (M, d)
+        Features from the generated distribution.
+    gamma : float
+        RBF bandwidth parameter ``γ`` in ``exp(-γ‖u − v‖²)``.
+
+    Returns
+    -------
+    torch.Tensor, scalar
+        Estimated MMD² (may be slightly negative due to finite sampling).
+    """
     xx = x @ x.t()
     yy = y @ y.t()
     xy = x @ y.t()

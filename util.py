@@ -33,7 +33,9 @@ from torch.utils.data.distributed import DistributedSampler
 from datasets import get_voxel_dataset
 
 
-# ── 1. Configuration & Data Structures ──────────────────────────────────────
+# =============================================================================
+# 1.  Configuration & Data Structures
+# =============================================================================
 
 
 class Config:
@@ -41,10 +43,14 @@ class Config:
 
     Nested dicts are converted to nested ``Config`` instances automatically.
 
-    Args:
-        config_dict: Flat or nested dictionary loaded from a YAML config file.
+    Parameters
+    ----------
+    config_dict : dict
+        Flat or nested dictionary loaded from a YAML config file.
 
-    Example::
+    Examples
+    --------
+    ::
 
         cfg = Config({"training": {"lr": 1e-4}})
         print(cfg.training.lr)  # 1e-4
@@ -65,10 +71,14 @@ class Config:
 def convert_to_numeric(value: Any) -> Any:
     """Recursively convert string representations of numbers to ``int`` or ``float``.
 
-    Args:
-        value: Arbitrary value (scalar, dict, or list) read from YAML.
+    Parameters
+    ----------
+    value : any
+        Arbitrary value (scalar, dict, or list) read from YAML.
 
-    Returns:
+    Returns
+    -------
+    any
         The input with string numbers replaced by their Python numeric types.
     """
     if isinstance(value, str):
@@ -89,10 +99,14 @@ def load_config(config_path: str) -> "Config":
     Numeric strings (e.g. ``"128"``, ``"1e-4"``) are coerced to their Python
     numeric types via :func:`convert_to_numeric`.
 
-    Args:
-        config_path: Path to the YAML configuration file.
+    Parameters
+    ----------
+    config_path : str
+        Path to the YAML configuration file.
 
-    Returns:
+    Returns
+    -------
+    Config
         Populated ``Config`` instance (empty config if the file is blank).
     """
     with open(config_path, "r") as f:
@@ -106,8 +120,10 @@ class Args:
     Provides a stable, attribute-based interface expected by helper functions
     such as :func:`setup_dataloader` and :func:`create_experiment_dirs`.
 
-    Args:
-        config: Populated experiment configuration.
+    Parameters
+    ----------
+    config : Config
+        Populated experiment configuration.
     """
 
     def __init__(self, config: Config):
@@ -130,7 +146,9 @@ class Args:
         self.gradient_clip = config.training.gradient_clip
 
 
-# ── 2. Environment & Distributed Setup ──────────────────────────────────────
+# =============================================================================
+# 2.  Environment & Distributed Setup
+# =============================================================================
 
 def setup_torch_config() -> None:
     """Configure PyTorch / cuDNN settings for optimal training performance.
@@ -148,10 +166,13 @@ def setup_torch_config() -> None:
 def set_random_seed(seed: int, deterministic: bool = True) -> None:
     """Set random seeds across Python, NumPy, and PyTorch for reproducibility.
 
-    Args:
-        seed:          Integer seed value.
-        deterministic: When ``True``, forces cuDNN into deterministic mode and
-                       disables benchmark auto-tuning (slower but reproducible).
+    Parameters
+    ----------
+    seed : int
+        Integer seed value.
+    deterministic : bool, optional
+        When ``True``, forces cuDNN into deterministic mode and disables
+        benchmark auto-tuning (slower but reproducible, default ``True``).
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -171,12 +192,16 @@ def setup_training_environment(args: Any) -> Tuple:
     Intended as a convenience wrapper for scripts that do not use the
     :class:`~train.Trainer` class directly.
 
-    Args:
-        args: Namespace with ``global_batch_size``, ``global_seed``,
-              ``results_dir``, ``model``, and ``num_workers`` attributes.
+    Parameters
+    ----------
+    args : namespace
+        Namespace with ``global_batch_size``, ``global_seed``, ``results_dir``,
+        ``model``, and ``num_workers`` attributes.
 
-    Returns:
-        ``(rank, device, experiment_dir, checkpoint_dir, logger)`` tuple.
+    Returns
+    -------
+    tuple
+        ``(rank, device, experiment_dir, checkpoint_dir, logger)``
     """
     dist.init_process_group("nccl")
     assert args.global_batch_size % dist.get_world_size() == 0, \
@@ -204,11 +229,15 @@ def create_experiment_dirs(args: Any) -> Tuple[str, str]:
     The experiment directory is numbered sequentially inside ``args.results_dir``
     to avoid overwriting previous runs.
 
-    Args:
-        args: Namespace with ``results_dir`` and ``model`` attributes.
+    Parameters
+    ----------
+    args : namespace
+        Namespace with ``results_dir`` and ``model`` attributes.
 
-    Returns:
-        ``(experiment_dir, checkpoint_dir)`` string tuple.
+    Returns
+    -------
+    tuple of str
+        ``(experiment_dir, checkpoint_dir)``
     """
     os.makedirs(args.results_dir, exist_ok=True)
     experiment_index = len(glob(f"{args.results_dir}/*"))
@@ -226,12 +255,16 @@ def create_logger(logging_dir: Optional[str]) -> logging.Logger:
     silently discarded.  The function is safe to call before the process group
     is initialised.
 
-    Args:
-        logging_dir: Directory in which ``log.txt`` is created (rank 0 only).
-                     Pass ``None`` on non-zero ranks.
+    Parameters
+    ----------
+    logging_dir : str or None
+        Directory in which ``log.txt`` is created (rank 0 only).
+        Pass ``None`` on non-zero ranks.
 
-    Returns:
-        Configured :class:`logging.Logger` instance.
+    Returns
+    -------
+    logging.Logger
+        Configured logger instance.
     """
     is_rank_zero = (
         dist.is_available() and dist.is_initialized() and dist.get_rank() == 0
@@ -265,7 +298,9 @@ def cleanup() -> None:
         dist.destroy_process_group()
 
 
-# ── 3. Weights & Biases ─────────────────────────────────────────────────────
+# =============================================================================
+# 3.  Weights & Biases
+# =============================================================================
 
 
 def wandb_enabled(config: Config) -> bool:
@@ -273,8 +308,15 @@ def wandb_enabled(config: Config) -> bool:
 
     Safe to call even when the ``wandb`` section is absent from the config.
 
-    Args:
-        config: Experiment configuration object.
+    Parameters
+    ----------
+    config : Config
+        Experiment configuration object.
+
+    Returns
+    -------
+    bool
+        ``True`` when ``config.wandb.enable`` is truthy.
     """
     return bool(getattr(getattr(config, "wandb", Config({})), "enable", False))
 
@@ -284,9 +326,12 @@ def setup_wandb(config: Config, rank: int) -> None:
 
     Has no effect on non-zero ranks or when ``config.wandb.enable`` is falsy.
 
-    Args:
-        config: Experiment configuration object.
-        rank:   Process rank in the distributed group.
+    Parameters
+    ----------
+    config : Config
+        Experiment configuration object.
+    rank : int
+        Process rank in the distributed group.
     """
     wandb_config = getattr(config, "wandb", Config({}))
     if rank != 0 or not bool(getattr(wandb_config, "enable", False)):
@@ -314,7 +359,9 @@ def setup_wandb(config: Config, rank: int) -> None:
     wandb.init(**init_kwargs)
 
 
-# ── 4. Data Loading ──────────────────────────────────────────────────────────
+# =============================================================================
+# 4.  Data Loading
+# =============================================================================
 
 
 def seed_worker(worker_id: int) -> None:
@@ -322,9 +369,11 @@ def seed_worker(worker_id: int) -> None:
 
     Should be passed as ``worker_init_fn`` to :class:`torch.utils.data.DataLoader`.
 
-    Args:
-        worker_id: Worker index assigned by PyTorch (unused directly; the seed
-                   is derived from ``torch.initial_seed()``).
+    Parameters
+    ----------
+    worker_id : int
+        Worker index assigned by PyTorch (unused directly; the seed is derived
+        from ``torch.initial_seed()``).
     """
     worker_seed = torch.initial_seed() % 2 ** 32
     np.random.seed(worker_seed)
@@ -345,17 +394,27 @@ def setup_dataloader(
     Automatically switches between :class:`~torch.utils.data.distributed.DistributedSampler`
     (when the process group is active) and simple shuffle-based loading.
 
-    Args:
-        args:      Namespace with ``data_path``, ``task``, ``global_batch_size``,
-                   and ``num_workers`` attributes.
-        config:    Experiment configuration supplying train/val list paths.
-        rank:      Process rank; used for sampler construction and diagnostics.
-        data_type: ``"train"`` or ``"val"``; controls shuffling and augmentation.
-        roi_size:  Spatial crop size ``(D, H, W)`` passed to the dataset.
-        seed:      Base random seed for the sampler and worker init.
-        augment:   Whether to apply data augmentation (forwarded to the dataset).
+    Parameters
+    ----------
+    args : namespace
+        Namespace with ``data_path``, ``task``, ``global_batch_size``, and
+        ``num_workers`` attributes.
+    config : Config
+        Experiment configuration supplying train/val list paths.
+    rank : int, optional
+        Process rank; used for sampler construction and diagnostics (default ``0``).
+    data_type : str, optional
+        ``"train"`` or ``"val"``; controls shuffling and augmentation (default ``"train"``).
+    roi_size : tuple of int, optional
+        Spatial crop size ``(D, H, W)`` passed to the dataset (default ``(32, 32, 32)``).
+    seed : int, optional
+        Base random seed for the sampler and worker init (default ``42``).
+    augment : bool, optional
+        Whether to apply data augmentation (default ``True``).
 
-    Returns:
+    Returns
+    -------
+    DataLoader
         Configured :class:`~torch.utils.data.DataLoader`.
     """
     dataset = get_voxel_dataset(
@@ -427,16 +486,24 @@ def return_train_val_loaders(
     Mutates *args* in-place to inject ``task`` and ``data_path`` from *config*
     before forwarding to :func:`setup_dataloader`.
 
-    Args:
-        args:   :class:`Args` namespace (mutated with ``task`` / ``data_path``).
-        rank:   Process rank forwarded to :func:`setup_dataloader`.
-        config: Experiment configuration object.
-        seed:   Random seed for the training loader.  The validation loader
-                always uses ``config.training.seed`` for reproducibility.
-        debug:  When ``True``, print a seed diagnostic on rank 0.
+    Parameters
+    ----------
+    args : Args
+        :class:`Args` namespace (mutated in-place with ``task`` / ``data_path``).
+    rank : int
+        Process rank forwarded to :func:`setup_dataloader`.
+    config : Config
+        Experiment configuration object.
+    seed : int
+        Random seed for the training loader.  The validation loader always uses
+        ``config.training.seed`` for reproducibility.
+    debug : bool, optional
+        When ``True``, print a seed diagnostic on rank 0 (default ``False``).
 
-    Returns:
-        ``(train_loader, val_loader)`` tuple.
+    Returns
+    -------
+    tuple of DataLoader
+        ``(train_loader, val_loader)``
     """
     args.task = config.data.task
     args.data_path = config.data.path
@@ -465,15 +532,20 @@ def return_train_val_loaders(
     return train_loader, val_loader
 
 
-# ── 5. Model Utilities ───────────────────────────────────────────────────────
+# =============================================================================
+# 5.  Model Utilities
+# =============================================================================
 
 
 def requires_grad(model: torch.nn.Module, flag: bool = True) -> None:
     """Set ``requires_grad`` on all parameters of *model*.
 
-    Args:
-        model: Any ``nn.Module``.
-        flag:  Target value for ``requires_grad`` (default ``True``).
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Any ``nn.Module``.
+    flag : bool, optional
+        Target value for ``requires_grad`` (default ``True``).
     """
     for p in model.parameters():
         p.requires_grad = flag
@@ -485,10 +557,15 @@ def update_ema(ema_model: torch.nn.Module, model: torch.nn.Module, decay: float 
 
     Formula: ``ema_param = decay * ema_param + (1 - decay) * param``
 
-    Args:
-        ema_model: Shadow model whose parameters are updated.
-        model:     Source model providing the latest weights.
-        decay:     EMA decay factor (higher → slower update; 0 copies *model* exactly).
+    Parameters
+    ----------
+    ema_model : torch.nn.Module
+        Shadow model whose parameters are updated.
+    model : torch.nn.Module
+        Source model providing the latest weights.
+    decay : float, optional
+        EMA decay factor; higher values slow the update.  ``0`` copies *model*
+        exactly (default ``0.9999``).
     """
     for ema_param, param in zip(ema_model.parameters(), model.parameters()):
         ema_param.mul_(decay).add_(param.detach(), alpha=1 - decay)
@@ -505,6 +582,7 @@ def initialize_model_with_pretrained(
     """Initialise model weights and optionally load a pretrained checkpoint.
 
     Handles three cases:
+
     - ``config.model.pretrained_path`` is set: loads matching weights, freezes
       coarse-path parameters for ``depth > 0`` models.
     - ``config.model.pretrained_path`` is absent: returns the model unchanged.
@@ -512,18 +590,27 @@ def initialize_model_with_pretrained(
     New parameters (shape mismatch or missing from checkpoint) are identified
     and returned so the optimiser can assign them the full learning rate.
 
-    Args:
-        model:   The (optionally DDP-wrapped) model to initialise.
-        config:  Experiment configuration object.
-        device:  Device string for ``torch.load`` (e.g. ``"cuda:0"``).
-        gain:    Weight-init gain forwarded to ``model.initialize_weights``.
-        rank:    Process rank; print statements execute only on rank 0.
-        logger:  Optional logger (falls back to ``print`` when ``None``).
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The (optionally DDP-wrapped) model to initialise.
+    config : Config
+        Experiment configuration object.
+    device : str
+        Device string for ``torch.load`` (e.g. ``"cuda:0"``).
+    gain : float, optional
+        Weight-init gain forwarded to ``model.initialize_weights`` (default ``0.3``).
+    rank : int, optional
+        Process rank; print statements execute only on rank 0 (default ``0``).
+    logger : logging.Logger or None, optional
+        Logger instance; falls back to ``print`` when ``None`` (default ``None``).
 
-    Returns:
-        ``(model, pretrained_flag, new_param_names)`` where *pretrained_flag*
-        is ``True`` when weights were loaded and *new_param_names* is the set
-        of parameter names that were *not* loaded from the checkpoint.
+    Returns
+    -------
+    tuple
+        ``(model, pretrained_flag, new_param_names)`` — *pretrained_flag* is
+        ``True`` when weights were loaded; *new_param_names* is the set of
+        parameter names not present in the checkpoint.
     """
     model_to_init = model.module if hasattr(model, "module") else model
     new_param_names: set = set()
@@ -603,7 +690,9 @@ def initialize_model_with_pretrained(
     return model, pretrained_flag, new_param_names
 
 
-# ── 6. Optimiser ─────────────────────────────────────────────────────────────
+# =============================================================================
+# 6.  Optimiser
+# =============================================================================
 
 
 def initialize_optimizer(
@@ -623,18 +712,25 @@ def initialize_optimizer(
     full LR while pretrained parameters use ``config.training.fine_tune_lr``
     (defaults to 10 % of the full LR).
 
-    Args:
-        model:            The (optionally DDP-wrapped) model.
-        config:           Experiment configuration object.
-        pretrained_flag:  ``True`` when the model was partially initialised from
-                          a pretrained checkpoint.
-        new_param_names:  Set / list of parameter names *not* from the checkpoint
-                          (used only when fine-tuning).
-        rank:             Process rank; diagnostics print only on rank 0.
-        debug:            When ``True``, print a summary of param counts and LRs.
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The (optionally DDP-wrapped) model.
+    config : Config
+        Experiment configuration object.
+    pretrained_flag : bool
+        ``True`` when the model was partially initialised from a checkpoint.
+    new_param_names : set or list
+        Parameter names *not* loaded from the checkpoint (used when fine-tuning).
+    rank : int, optional
+        Process rank; diagnostics print only on rank 0 (default ``0``).
+    debug : bool, optional
+        When ``True``, print a summary of param counts and LRs (default ``False``).
 
-    Returns:
-        Configured :class:`torch.optim.AdamW` instance.
+    Returns
+    -------
+    torch.optim.AdamW
+        Configured optimiser instance.
     """
     model_module = model.module if hasattr(model, "module") else model
     param_groups: List[Dict[str, Any]] = []
@@ -683,7 +779,9 @@ def initialize_optimizer(
     return optimizer
 
 
-# ── 7. Checkpoint Management ─────────────────────────────────────────────────
+# =============================================================================
+# 7.  Checkpoint Management
+# =============================================================================
 
 MAX_CHECKPOINTS = 3
 
@@ -694,9 +792,12 @@ def manage_checkpoints(checkpoint_dir: str, rank: int) -> None:
     Only executes on rank 0.  Uses pure Python (no shell) to avoid injection
     risks from directory paths containing special characters.
 
-    Args:
-        checkpoint_dir: Directory containing ``*.pt`` checkpoint files.
-        rank:           Process rank; the function is a no-op on non-zero ranks.
+    Parameters
+    ----------
+    checkpoint_dir : str
+        Directory containing ``*.pt`` checkpoint files.
+    rank : int
+        Process rank; the function is a no-op on non-zero ranks.
     """
     if rank != 0:
         return
@@ -712,9 +813,12 @@ def manage_inverse_checkpoints(checkpoint_dir: str, rank: int) -> None:
     Mirror of :func:`manage_checkpoints` for workflows where the earliest
     checkpoints are the ones to preserve.  Uses pure Python (no shell).
 
-    Args:
-        checkpoint_dir: Directory containing ``*.pt`` checkpoint files.
-        rank:           Process rank; the function is a no-op on non-zero ranks.
+    Parameters
+    ----------
+    checkpoint_dir : str
+        Directory containing ``*.pt`` checkpoint files.
+    rank : int
+        Process rank; the function is a no-op on non-zero ranks.
     """
     if rank != 0:
         return
@@ -724,7 +828,9 @@ def manage_inverse_checkpoints(checkpoint_dir: str, rank: int) -> None:
         os.remove(new_ckpt)
 
 
-# ── 8. Logging & Diagnostics ─────────────────────────────────────────────────
+# =============================================================================
+# 8.  Logging & Diagnostics
+# =============================================================================
 
 
 def log_params(model: torch.nn.Module, logger: logging.Logger) -> None:
@@ -733,9 +839,12 @@ def log_params(model: torch.nn.Module, logger: logging.Logger) -> None:
     For small tensors (< 100 elements) the full values are logged; for larger
     tensors only min / max / mean statistics are logged.
 
-    Args:
-        model:  The (DDP-wrapped) model whose parameters to inspect.
-        logger: Logger instance to write to.
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The (DDP-wrapped) model whose parameters to inspect.
+    logger : logging.Logger
+        Logger instance to write to.
     """
     if hasattr(model.module, "blocks"):
         logger.info("Logging parameters from transformer blocks:")
@@ -765,12 +874,18 @@ def print_optimizer_params(
 ) -> None:
     """Log a table of parameter names, grad flags, LRs, and param groups.
 
-    Args:
-        optimizer:     The active optimiser.
-        model:         The (DDP-wrapped) model whose parameters to inspect.
-        learning_rate: Full LR (used to identify "New" param group).
-        fine_tune_lr:  Fine-tune LR (used to identify "Fine" param group).
-        logger:        Logger instance to write to.
+    Parameters
+    ----------
+    optimizer : torch.optim.Optimizer
+        The active optimiser.
+    model : torch.nn.Module
+        The (DDP-wrapped) model whose parameters to inspect.
+    learning_rate : float
+        Full LR (used to identify the "New" param group).
+    fine_tune_lr : float
+        Fine-tune LR (used to identify the "Fine" param group).
+    logger : logging.Logger
+        Logger instance to write to.
     """
     param_lrs: Dict[int, float] = {
         id(p): pg.get("lr")
@@ -796,16 +911,24 @@ def weights_detection(
     Prints matched, shape-mismatched, and missing parameter names to stdout,
     then loads the compatible subset with ``strict=False``.
 
-    Args:
-        model:           The model to load weights into.
-        device:          Device string passed to ``torch.load``.
-        pretrained_path: Path to the pretrained checkpoint file.
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The model to load weights into.
+    device : str
+        Device string passed to ``torch.load``.
+    pretrained_path : str
+        Path to the pretrained checkpoint file.
 
-    Returns:
+    Returns
+    -------
+    torch.nn.Module
         The model with compatible weights loaded in-place.
 
-    Raises:
-        Exception: Re-raises any error from ``torch.load`` or ``load_state_dict``.
+    Raises
+    ------
+    Exception
+        Re-raises any error from ``torch.load`` or ``load_state_dict``.
     """
     try:
         is_ddp = isinstance(model, torch.nn.parallel.DistributedDataParallel)
@@ -857,7 +980,9 @@ def weights_detection(
         raise
 
 
-# ── 9. Evaluation & Visualisation ────────────────────────────────────────────
+# =============================================================================
+# 9.  Evaluation & Visualisation
+# =============================================================================
 
 
 def save_evaluation_samples(
@@ -875,13 +1000,20 @@ def save_evaluation_samples(
     configurable number of full 3-D volumes are additionally saved as
     ``*.nii.gz`` directly in ``experiment_dir``.
 
-    Args:
-        samples:        Batch tensor of shape ``(B, C, D, H, W)`` on any device.
-        experiment_dir: Root output directory (created if absent).
-        image_size:     Spatial size used to compute the middle slice index.
-        epoch:          Current epoch (embedded in saved file names).
-        nii_number:     Maximum number of NIfTI volumes to write (``None`` saves all).
-        logger:         Optional logger for progress messages.
+    Parameters
+    ----------
+    samples : torch.Tensor
+        Batch tensor of shape ``(B, C, D, H, W)`` on any device.
+    experiment_dir : str
+        Root output directory (created if absent).
+    image_size : int
+        Spatial size used to compute the middle slice index.
+    epoch : int
+        Current epoch, embedded in saved file names.
+    nii_number : int or None, optional
+        Maximum number of NIfTI volumes to write; ``None`` saves all (default ``None``).
+    logger : logging.Logger or None, optional
+        Logger for progress messages (default ``None``).
     """
     import matplotlib.pyplot as plt
 
@@ -938,7 +1070,60 @@ def save_evaluation_samples(
     _save_nifti_volumes(samples[:n])
 
 
-# ── 10. Miscellaneous ────────────────────────────────────────────────────────
+# =============================================================================
+# 10. W&B Image Logging
+# =============================================================================
+
+
+def log_slices_to_wandb(tag: str, volumes: torch.Tensor, epoch: int) -> None:
+    """Upload orthogonal middle slices of a volume batch to wandb.
+
+    For each volume in the batch the axial, coronal, and sagittal centre slices
+    are normalised to [0, 255] and logged as ``wandb.Image`` objects under
+    ``tag``.  No-ops silently when ``wandb.run`` is not active.
+
+    Parameters
+    ----------
+    tag : str
+        Panel name in the wandb UI (e.g. ``"eval/reconstruction"``).
+    volumes : torch.Tensor
+        Float tensor of shape ``(B, C, D, H, W)`` on any device.
+    epoch : int
+        Current epoch, logged alongside the images.
+    """
+    try:
+        import wandb as _wandb
+    except ImportError:
+        return
+
+    if _wandb.run is None:
+        return
+
+    volumes = volumes.detach().cpu().float()
+    B, _C, D, H, W = volumes.shape
+    mid_d, mid_h, mid_w = D // 2, H // 2, W // 2
+
+    def _to_uint8(arr: np.ndarray) -> np.ndarray:
+        lo, hi = arr.min(), arr.max()
+        if hi > lo:
+            arr = (arr - lo) / (hi - lo)
+        return (arr * 255).clip(0, 255).astype(np.uint8)
+
+    images = []
+    for b in range(B):
+        vol = volumes[b, 0].numpy()  # [D, H, W]
+        images += [
+            _wandb.Image(_to_uint8(vol[mid_d, :, :]), caption=f"sample{b} axial"),
+            _wandb.Image(_to_uint8(vol[:, mid_h, :]), caption=f"sample{b} coronal"),
+            _wandb.Image(_to_uint8(vol[:, :, mid_w]), caption=f"sample{b} sagittal"),
+        ]
+
+    _wandb.log({tag: images, "epoch": epoch})
+
+
+# =============================================================================
+# 11. Miscellaneous
+# =============================================================================
 
 
 def center_crop_arr(pil_image: Image.Image, image_size: int) -> Image.Image:
@@ -947,12 +1132,17 @@ def center_crop_arr(pil_image: Image.Image, image_size: int) -> Image.Image:
     Down-samples by 2× repeatedly until the shorter side is less than
     ``2 * image_size``, then rescales and crops.
 
-    Args:
-        pil_image:  Source PIL image.
-        image_size: Target square side length in pixels.
+    Parameters
+    ----------
+    pil_image : PIL.Image.Image
+        Source PIL image.
+    image_size : int
+        Target square side length in pixels.
 
-    Returns:
-        Cropped PIL image of size ``(image_size, image_size)``.
+    Returns
+    -------
+    PIL.Image.Image
+        Cropped image of size ``(image_size, image_size)``.
     """
     while min(*pil_image.size) >= 2 * image_size:
         pil_image = pil_image.resize(
@@ -971,7 +1161,9 @@ def center_crop_arr(pil_image: Image.Image, image_size: int) -> Image.Image:
 def get_project_root() -> str:
     """Return the name of the directory containing this file.
 
-    Returns:
+    Returns
+    -------
+    str
         Parent directory name of the resolved script path.
     """
     return Path(__file__).resolve().parent.name
@@ -982,7 +1174,9 @@ def getting_basename() -> str:
 
     Also prints the directory name to stdout.
 
-    Returns:
+    Returns
+    -------
+    str
         Directory name string.
     """
     directory_name = os.path.basename(os.path.dirname(os.path.abspath(__file__)))

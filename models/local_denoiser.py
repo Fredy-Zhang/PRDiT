@@ -23,17 +23,19 @@ to_3tuple = _ntuple(3)
 
 
 class ExtractPatches3D(nn.Module):
-    """
-    Extract 3D patches from a volume and flatten them into a token sequence.
+    """Extract 3D patches from a volume and flatten them into a token sequence.
 
-    The module uses chained `unfold` operations so it can support overlapping
-    patches as well as non-overlapping ones. The output is arranged in the
-    transformer-friendly shape `[B, N, patch_dim]`.
+    Uses chained ``unfold`` operations to support both overlapping and
+    non-overlapping patches.  Output shape is ``[B, N, patch_dim]``.
 
-    Args:
-        patch_size: Size of patches to extract (scalar or 3-tuple).
-        stride: Stride for patch extraction (scalar or 3-tuple).
-        padding: Padding to apply before extraction.
+    Parameters
+    ----------
+    patch_size : int or tuple of int
+        Edge length of extracted patches (scalar or 3-tuple).
+    stride : int or tuple of int
+        Stride for patch extraction (scalar or 3-tuple).
+    padding : int, optional
+        Reflection padding applied before extraction (default ``0``).
     """
 
     def __init__(
@@ -92,27 +94,34 @@ class ExtractPatches3D(nn.Module):
 
 
 class MlpDenoiser(nn.Module):
-    """
-    Patchwise MLP denoiser used in the coarse PRDiT path.
+    """Patchwise MLP denoiser used in the coarse PRDiT path.
 
-    This module performs lightweight denoising directly in patch space using two
-    SwiGLU blocks and timestep-conditioned modulation. It is the main workhorse
-    for stage-1 coarse denoising.
+    Performs lightweight denoising directly in patch space using two SwiGLU
+    blocks with timestep-conditioned modulation.
 
-    Note:
-        In the coarse branch, `hidden_size` refers to the patch-token width
-        (`in_channels * extract_patch_size**3`), not the transformer hidden
-        size used by the fine branch.
-        `input_size`, `act_layer`, and `swiglu_mlp` are retained only for API
-        compatibility with older constructor call sites.
+    Notes
+    -----
+    ``hidden_size`` refers to the patch-token width
+    (``in_channels * extract_patch_size**3``), not the transformer hidden size.
+    ``input_size``, ``act_layer``, and ``swiglu_mlp`` are retained only for
+    API compatibility with older constructor signatures.
 
-    Args:
-        input_size: Target cubic volume size used for reconstructing outputs.
-        hidden_size: Patch-token feature dimension used by the coarse MLP.
-        patch_size: Edge length of each output patch.
-        out_channels: Number of output channels to predict per patch.
-        mlp_ratio: Hidden layer expansion ratio inside the SwiGLU blocks.
-        swiglu_mlp: Retained for compatibility with older constructor calls.
+    Parameters
+    ----------
+    input_size : int
+        Target cubic volume size (retained for compatibility; unused).
+    hidden_size : int
+        Patch-token feature dimension.
+    patch_size : int
+        Edge length of each output patch.
+    out_channels : int
+        Number of output channels predicted per patch.
+    act_layer : callable, optional
+        Retained for compatibility (default ``nn.ReLU``).
+    mlp_ratio : float, optional
+        Hidden layer expansion ratio inside the SwiGLU blocks (default ``1.0``).
+    swiglu_mlp : bool, optional
+        Retained for compatibility (default ``False``).
     """
 
     def __init__(
@@ -164,29 +173,40 @@ class MlpDenoiser(nn.Module):
 
 
 class CoarseDenoiser(nn.Module):
-    """
-    Coarse denoising path based on an MLP operating directly in patch space.
+    """Coarse denoising path using an MLP operating directly in patch space.
 
-    The coarse branch first extracts raw 3D patches from the input volume, then
-    denoises those patch tokens with `MlpDenoiser`.
+    Extracts raw 3D patches from the input volume and denoises them with
+    :class:`MlpDenoiser`.
 
-    Note:
-        `hidden_size` is retained for constructor compatibility with the full
-        PRDiT config, but the coarse MLP width is determined by the flattened
-        patch dimension `in_channels * extract_patch_size**3`.
+    Notes
+    -----
+    ``hidden_size`` is retained for constructor compatibility with the full
+    PRDiT config; the actual coarse MLP width is ``in_channels * extract_patch_size**3``.
 
-    Args:
-        in_channels: Number of channels in the input volume.
-        extract_patch_size: Edge length of the patches extracted from the input.
-        hidden_size: Legacy compatibility argument from the full PRDiT config.
-        patch_size: Edge length of each output patch predicted by the coarse branch.
-        out_channels: Number of channels predicted per voxel.
-        input_size: Edge length of the input/output cubic volume.
-        stride: Patch extraction stride.
-        padding: Reflection padding used before extraction.
-        mlp_ratio: SwiGLU expansion ratio inside the coarse MLP.
-        swiglu_mlp: Retained compatibility flag for coarse MLP variants.
-        act_layer: Retained compatibility hook for older constructor signatures.
+    Parameters
+    ----------
+    in_channels : int
+        Number of channels in the input volume.
+    extract_patch_size : int
+        Edge length of the patches extracted from the input.
+    hidden_size : int
+        Retained for PRDiT config compatibility (unused).
+    patch_size : int
+        Edge length of each output patch.
+    out_channels : int
+        Number of channels predicted per voxel.
+    input_size : int
+        Edge length of the cubic input/output volume.
+    stride : int, optional
+        Patch extraction stride (default ``4``).
+    padding : int, optional
+        Reflection padding used before extraction (default ``2``).
+    mlp_ratio : float, optional
+        SwiGLU expansion ratio (default ``1.0``).
+    swiglu_mlp : bool, optional
+        Retained for compatibility (default ``True``).
+    act_layer : callable, optional
+        Retained for compatibility (default ``nn.GELU``).
     """
 
     def __init__(

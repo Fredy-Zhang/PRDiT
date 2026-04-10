@@ -50,6 +50,24 @@ class TimestepEmbedder(nn.Module):
         frequency_embedding_size: int = 256,
         is_depth_zero: bool = True,
     ):
+        """Initialize the timestep embedder.
+
+        Parameters
+        ----------
+        hidden_size : int
+            Width of the shared MLP hidden layer.
+        coarse_hidden_size : int
+            Output dimension for the coarse conditioning head.
+        fine_hidden_size : int
+            Output dimension for the fine conditioning head; ignored when
+            ``is_depth_zero=True`` (head becomes ``nn.Identity``).
+        frequency_embedding_size : int, optional
+            Dimensionality of the sinusoidal positional embedding
+            (default ``256``).
+        is_depth_zero : bool, optional
+            When ``True`` the fine head is replaced with an identity map so
+            that only stage-1 parameters are created (default ``True``).
+        """
         super().__init__()
         self.frequency_embedding_size = frequency_embedding_size
 
@@ -116,6 +134,40 @@ class PRDiT(nn.Module):
         learn_sigma: bool = False,
         flash_attn: bool = False,
     ):
+        """Initialize the PRDiT model.
+
+        Parameters
+        ----------
+        input_size : int, optional
+            Spatial edge length of input volumes (default ``32``).
+        patch_size : int, optional
+            Patch edge length used by the coarse extractor (default ``2``).
+        stride : int, optional
+            Output patch stride used for un-patchification (default ``4``).
+        padding : int, optional
+            Padding applied in the patch-extraction convolution (default ``2``).
+        in_channels : int, optional
+            Number of input voxel channels (default ``1``).
+        hidden_size : int, optional
+            Shared transformer hidden dimension (default ``1152``).
+        depth : int, optional
+            Number of transformer blocks in the stage-2 refiner; ``0`` for
+            stage-1-only mode (default ``28``).
+        num_heads : int, optional
+            Attention heads in each transformer block (default ``16``).
+        mlp_ratio : float, optional
+            MLP expansion factor inside transformer blocks (default ``4.0``).
+        class_dropout_prob : float, optional
+            Unused — kept for API compatibility (default ``0.1``).
+        num_classes : int, optional
+            Unused — kept for API compatibility (default ``1``).
+        learn_sigma : bool, optional
+            When ``True`` the output channels are doubled to predict both the
+            mean and variance (default ``False``).
+        flash_attn : bool, optional
+            Enable FlashAttention in stage-2 transformer blocks (default
+            ``False``).
+        """
         super().__init__()
         del class_dropout_prob, num_classes
 

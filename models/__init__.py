@@ -74,7 +74,34 @@ def create_prdit_model(
     mlp_ratio: float = 4.0,
     **kwargs,
 ):
-    """Create a PRDiT model from a compact set of architecture parameters."""
+    """Create a :class:`~models.models.PRDiT` from a compact set of architecture parameters.
+
+    Parameters
+    ----------
+    size : str, optional
+        Model scale key — one of ``"XS"``, ``"S"``, ``"B"``, ``"L"``, ``"XL"``
+        (default ``"S"``).
+    patch_size : int, optional
+        Patch extraction edge length (default ``12``).
+    depth : int, optional
+        Number of transformer blocks; ``0`` builds a stage-1 local denoiser
+        (default ``0``).
+    stride : int, optional
+        Patch extraction stride (default ``8``).
+    padding : int, optional
+        Padding before patch extraction (default ``2``).
+    num_heads : int, optional
+        Number of attention heads (default ``6``).
+    mlp_ratio : float, optional
+        MLP expansion ratio (default ``4.0``).
+    **kwargs
+        Extra keyword arguments forwarded to :class:`~models.models.PRDiT`.
+
+    Returns
+    -------
+    PRDiT
+        Constructed model instance.
+    """
     if size not in MODEL_HIDDEN_SIZES:
         raise ValueError(f"Invalid model size: {size}. Must be one of {list(MODEL_HIDDEN_SIZES.keys())}")
 
@@ -91,7 +118,20 @@ def create_prdit_model(
 
 
 def register_prdit_model(name: str, **model_args):
-    """Register a named PRDiT constructor in the global registry."""
+    """Register a named PRDiT constructor in the global ``PRDiT_models`` registry.
+
+    Parameters
+    ----------
+    name : str
+        Registry key, e.g. ``"PRDiT-B/12/4"``.
+    **model_args
+        Architecture arguments forwarded to :func:`create_prdit_model`.
+
+    Returns
+    -------
+    callable
+        The registered constructor function.
+    """
 
     def model_fn(**kwargs):
         return create_prdit_model(**model_args, **kwargs)
@@ -101,7 +141,23 @@ def register_prdit_model(name: str, **model_args):
 
 
 def load_model(config):
-    """Instantiate the configured PRDiT model from the registry."""
+    """Instantiate the configured PRDiT model from the ``PRDiT_models`` registry.
+
+    Parameters
+    ----------
+    config : Config
+        Experiment configuration; ``config.model.name`` selects the variant.
+
+    Returns
+    -------
+    PRDiT
+        Constructed and configured model instance.
+
+    Raises
+    ------
+    ValueError
+        If ``config.model.name`` is not registered.
+    """
     model_name = config.model.name
     if model_name not in PRDiT_models:
         raise ValueError(f"Model name {model_name} is not recognized.")
