@@ -15,6 +15,7 @@ Stage 2 (global residual DiT, depth>0):
 """
 
 import argparse
+import glob
 import logging
 import os
 import random
@@ -481,7 +482,13 @@ class Trainer:
 
     # -- Checkpoint -----------------------------------------------------------
 
-    def save_checkpoint(self, epoch, train_steps: int, save_optimizer: bool = False) -> None:
+    def save_checkpoint(
+        self,
+        epoch,
+        train_steps: int,
+        save_optimizer: bool = False,
+        best_loss: Optional[float] = None,
+    ) -> None:
         """Save a checkpoint to ``checkpoint_dir``.
 
         Parameters
@@ -493,6 +500,9 @@ class Trainer:
             Total optimiser steps completed so far.
         save_optimizer : bool, optional
             Include optimiser state dict when ``True`` (default ``False``).
+        best_loss : float or None, optional
+            Best validation loss achieved so far; stored under the
+            ``"best_loss"`` key when provided (default ``None``).
         """
         if self.rank != 0:
             return
@@ -507,7 +517,14 @@ class Trainer:
         if save_optimizer:
             checkpoint["optimizer"] = self.optimizer.state_dict()
 
-        filename = "best.pt" if epoch == "best" else f"{epoch:06d}.pt"
+        if epoch == "best":
+            # Remove previous best file before writing the new one.
+            for old in glob.glob(os.path.join(self.checkpoint_dir, "best_*.pt")):
+                os.remove(old)
+            loss_tag = f"_{best_loss:.6f}" if best_loss is not None else ""
+            filename = f"best{loss_tag}.pt"
+        else:
+            filename = f"{epoch:06d}.pt"
         path = os.path.join(self.checkpoint_dir, filename)
         torch.save(checkpoint, path)
         suffix = " (with optimizer)" if save_optimizer else ""
@@ -604,7 +621,7 @@ class Trainer:
                     if eval_loss is not None and eval_loss < self._best_eval_loss:
                         self._best_eval_loss = eval_loss
                         if self.rank == 0:
-                            self.save_checkpoint("best", train_steps)
+                            self.save_checkpoint("best", train_steps, best_loss=eval_loss)
                             self.logger.info(
                                 f"New best eval loss: {eval_loss:.6f} — saved best.pt"
                             )
