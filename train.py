@@ -524,16 +524,16 @@ class Trainer:
         if self.is_distributed:
             dist.barrier()
 
-        if self.rank == 0:
-            self.logger.info(
-                f"Training on {self.world_size} GPU(s) for {self.config.training.epochs} epochs."
-            )
-
         train_steps = 0
         log_steps   = 0
         running_loss = running_noise_loss = running_img_loss = 0.0
         start_time   = time()
         gradient_clip = self.args.gradient_clip
+
+        if self.rank == 0:
+            self.logger.info(
+                f"Training on {self.world_size} GPU(s) for {self.config.training.epochs} epochs."
+            )
 
         try:
             for epoch in range(self.config.training.epochs):
