@@ -340,7 +340,7 @@ def setup_wandb(config: Config, rank: int) -> None:
     init_kwargs: Dict[str, Any] = {
         "project": getattr(wandb_config, "project", None),
         "entity": getattr(wandb_config, "entity", None),
-        "name": f"Lidc-{config.model.name}-{config.data.image_size}",
+        "name": f"{config.data.task}-{config.model.name}-{config.data.image_size}",
         "config": {
             "architecture": config.model.name,
             "image_size": config.data.image_size,
