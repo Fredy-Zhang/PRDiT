@@ -541,23 +541,44 @@ class Trainer:
         if self.is_distributed:
             dist.barrier()
 
+        # Resolve total training steps.
+        # Prefer total_steps if set; fall back to epochs × steps-per-epoch so
+        # old configs keep working.  Using steps (not epochs) as the primary
+        # control makes training dataset-size-agnostic: the same total_steps
+        # value gives identical gradient-update budgets regardless of how many
+        # samples the dataset contains.
+        total_steps_target = getattr(self.config.training, "total_steps", None)
+        if total_steps_target is None:
+            steps_per_epoch = len(self.train_loader)
+            total_steps_target = self.config.training.epochs * steps_per_epoch
+            if self.rank == 0:
+                self.logger.info(
+                    f"'total_steps' not configured — derived {total_steps_target:,} steps "
+                    f"from {self.config.training.epochs} epochs × "
+                    f"{steps_per_epoch} steps/epoch."
+                )
+
+        if self.rank == 0:
+            self.logger.info(
+                f"Training on {self.world_size} GPU(s) for {total_steps_target:,} total steps."
+            )
+
         train_steps = 0
         log_steps   = 0
         running_loss = running_noise_loss = running_img_loss = 0.0
         start_time   = time()
         gradient_clip = self.args.gradient_clip
-
-        if self.rank == 0:
-            self.logger.info(
-                f"Training on {self.world_size} GPU(s) for {self.config.training.epochs} epochs."
-            )
+        epoch = 0
 
         try:
-            for epoch in range(self.config.training.epochs):
+            while train_steps < total_steps_target:
                 if hasattr(self.train_loader.sampler, "set_epoch"):
                     self.train_loader.sampler.set_epoch(epoch)
 
                 for batch in self.train_loader:
+                    if train_steps >= total_steps_target:
+                        break
+
                     result = train_step(
                         self.model,
                         self.diffusion,
@@ -601,9 +622,10 @@ class Trainer:
                                     "train/noise_loss": avg_noise,
                                     "train/img_loss":   avg_img,
                                     "train/epoch":      epoch,
+                                    "train/step":       train_steps,
                                 })
                             self.logger.info(
-                                f"Epoch {epoch:4d} | Step {train_steps:7d} | "
+                                f"Epoch {epoch:4d} | Step {train_steps:7d}/{total_steps_target:,} | "
                                 f"Loss: {avg_loss:.6f} "
                                 f"(noise: {avg_noise:.6f}, img: {avg_img:.6f}) | "
                                 f"Speed: {steps_per_sec:.2f} steps/s"
@@ -615,31 +637,33 @@ class Trainer:
 
                 # -- End-of-epoch hooks ---------------------------------------
 
-                if (epoch + 1) % self.config.logging.eval_every == 0:
-                    eval_loss = self._evaluate(epoch)
-                    # depth-0 only: persist best checkpoint by val MSE.
-                    if eval_loss is not None and eval_loss < self._best_eval_loss:
-                        self._best_eval_loss = eval_loss
-                        if self.rank == 0:
-                            self.save_checkpoint("best", train_steps, best_loss=eval_loss)
-                            self.logger.info(
-                                f"New best eval loss: {eval_loss:.6f} — saved best.pt"
-                            )
+                    if train_steps % self.config.logging.eval_every == 0:
+                        eval_loss = self._evaluate(epoch)
+                        # depth-0 only: persist best checkpoint by val MSE.
+                        if eval_loss is not None and eval_loss < self._best_eval_loss:
+                            self._best_eval_loss = eval_loss
+                            if self.rank == 0:
+                                self.save_checkpoint("best", train_steps, best_loss=eval_loss)
+                                self.logger.info(
+                                    f"New best eval loss: {eval_loss:.6f} — saved best_{eval_loss:.6f}.pt"
+                                )
 
-                if (epoch + 1) % self.config.logging.ckpt_every == 0:
-                    manage_checkpoints(self.checkpoint_dir, self.rank)
-                    # Include optimiser state every 5000 epochs for exact resumption.
-                    save_opt = (
-                        (epoch + 1) % 5000 == 0
-                        or (epoch + 1) == self.config.training.epochs
-                    )
-                    self.save_checkpoint(epoch + 1, train_steps, save_opt)
-                    if self.is_distributed:
-                        dist.barrier()
+                    if train_steps % self.config.logging.ckpt_every == 0:
+                        manage_checkpoints(self.checkpoint_dir, self.rank)
+                        # Include optimiser state every 5000 steps for exact resumption.
+                        save_opt = (
+                            train_steps % 5000 == 0
+                            or train_steps >= total_steps_target
+                        )
+                        self.save_checkpoint(train_steps, train_steps, save_opt)
+                        if self.is_distributed:
+                            dist.barrier()
+
+                epoch += 1
 
             # Final checkpoint regardless of ckpt_every schedule.
             if self.rank == 0:
-                self.save_checkpoint(self.config.training.epochs, train_steps, save_optimizer=True)
+                self.save_checkpoint(train_steps, train_steps, save_optimizer=True)
             self.logger.info("Training completed successfully!")
 
         except Exception as exc:

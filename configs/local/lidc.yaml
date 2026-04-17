@@ -23,7 +23,7 @@ model:
 training:
   batch_size: 64           # Global batch size for training
   learning_rate: 1e-4      # Learning rate for AdamW optimizer
-  epochs: 6000             # Number of training epochs
+  total_steps: 104000      # Total gradient updates (replaces epochs — dataset-size-agnostic)
   seed: 42                 # Random seed for reproducibility
   weight_decay: 0.0        # Weight decay for optimizer
   gradient_clip: 1.0
