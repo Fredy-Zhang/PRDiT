@@ -1,120 +1,155 @@
-# PRDiT: Pixel-Level Residual Diffusion Transformer for Scalable 3D CT Volume Generation
+# PRDiT 256³ Flow Matching
 
-[![ICLR 2026](https://img.shields.io/badge/ICLR-2026-blue)](https://openreview.net/forum?id=bWtRZQ1rm2)
-[![Poster](https://img.shields.io/badge/Poster-ICLR%202026-8A2BE2)](https://iclr.cc/media/PosterPDFs/ICLR%202026/10008602.png?t=1774447885.2973316)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+This branch extends the baseline [PRDiT](https://github.com/Fredy-Zhang/PRDiT/tree/main)
+implementation to native **256 × 256 × 256 CT generation** with Flow Matching.
+For the paper, architecture overview, installation, dataset preparation, baseline
+training, and citation, see the [baseline README](https://github.com/Fredy-Zhang/PRDiT/blob/main/README.md).
 
-Official implementation of **PRDiT** — *Pixel-Level Residual Diffusion Transformer* — a scalable approach for 3D CT volume generation, accepted at **ICLR 2026**.
+## What changes from the baseline?
 
-## 📑 Table of Contents
+| Component | Baseline PRDiT | This 256³ branch |
+|---|---|---|
+| Volume size | 128³ | 256³ |
+| Generative process | IaN diffusion with image/noise heads | Flow Matching with one velocity head |
+| Model output channels | 2 | 1 |
+| Stage-1 model | `PRDiT-B/12/0` | `PRDiT-B/16/0-s16` |
+| Stage-2 model | `PRDiT-B/12/4` | `PRDiT-B/16/12-s16` |
+| Stage-2 token grid | Standard stride-8 grid | Stride-16, non-overlapping 16³ patches (4096 tokens) |
+| Sampling | Reverse diffusion | ODE solvers: Euler, Heun, RK4, and adaptive Heun |
+| Memory controls | Standard training | bfloat16 AMP, gradient accumulation, and optional activation checkpointing |
+| Default ODE budget | N/A | 100 Euler steps |
 
-- [Paper](#paper)
-- [Abstract](#abstract)
-- [Installation](#installation)
-- [Install Dataset](#install-dataset)
-- [Training](#training-from-scratch)
-- [Sampling](#sampling)
-- [256³ Flow Matching Results](#256-flow-matching-results)
-- [Evaluation](#evaluation)
-- [Citing](#citing)
+The stride-16 variants keep the stage-2 token sequence at 16³ = 4096 tokens.
+This avoids the 32³ = 32768-token sequence that a stride-8 configuration would
+produce at 256³ resolution.
 
-## Paper
+## 256³ configuration
 
-- **Paper:** [OpenReview](https://openreview.net/forum?id=bWtRZQ1rm2)
-- **Poster:** [ICLR 2026 Poster](https://iclr.cc/media/PosterPDFs/ICLR%202026/10008602.png?t=1774447885.2973316)
-- **Project Page:** [Link to project page (Coming soon)](#)
+The branch provides two LIDC configurations:
 
-> *Poster and project page links will be added when available.*
+- `configs/local/lidc.yaml`: stage 1, `PRDiT-B/16/0-s16`
+- `configs/global/lidc.yaml`: stage 2, `PRDiT-B/16/12-s16`
 
-## Note 📝
+Replace these placeholders before training:
 
-- ➡️ PRDiT architecture implemented [here](#) 📄
-- ➡️ Trained models available [here](#) 💻
-- ➡️ Training and evaluation code [here](#) ✨
+- `{LIDC_DATA_ROOT}`: directory containing the LIDC volumes
+- `{STAGE1_CHECKPOINT}`: trained stage-1 checkpoint used by stage 2
+- `{WANDB_PROJECT}` and `{WANDB_ENTITY}`: optional; W&B is disabled by default
 
-## Updates 🎉
+The 256³ defaults use smaller micro-batches than the baseline:
 
-- *Add release milestones and updates here.*
+| Stage | Batch size | Accumulation steps | Effective batch size | AMP | Activation checkpointing |
+|---|---:|---:|---:|---|---|
+| Stage 1 | 16 | 2 | 32 | bfloat16 | Off |
+| Stage 2 | 8 | 4 | 32 | bfloat16 | On |
 
-## Abstract
+## Pretrained 256³ stage-2 model
 
-<p align="center">
-  <img src="assets/overview.png" width="95%" alt="PRDiT Architecture Overview">
-</p>
+The pretrained stage-2 `PRDiT-B/16/12-s16` checkpoint is available from
+[Google Drive](https://drive.google.com/file/d/1hFPNFhbs7gmRBAARa893FUHitQ2VSB_p/view?usp=sharing).
+This is the final Flow Matching model used to sample unconditional 256³
+generative outputs; it is not a stage-1 checkpoint.
 
-Generating high-resolution 3D CT volumes with fine details remains challenging due to substantial computational demands and optimization difficulties inherent to existing generative models. In this paper, we propose the Pixel-Level Residual Diffusion Transformer (PRDiT), a scalable generative framework that synthesizes high-quality 3D medical volumes directly at voxel-level. PRDiT introduces a two-stage training architecture comprising 1) a local denoiser in the form of an MLP-based blind estimator operating on overlapping 3D patches to separate low-frequency structures efficiently, and 2) a global residual diffusion transformer employing memory-efficient attention to model and refine high-frequency residuals across entire volumes. This coarse-to-fine modeling strategy simplifies optimization, enhances training stability, and effectively preserves subtle structures without the limitations of an autoencoder bottleneck. Extensive experiments conducted on the LIDC-IDRI and RAD-ChestCT datasets demonstrate that PRDiT consistently outperforms state-of-the-art models, such as HA-GAN, 3D LDM and WDM-3D, achieving significantly lower 3D FID, MMD and Wasserstein distance scores.
-
-## Installation
-
-**Requirements:** Python 3.10+, PyTorch 2.0+, CUDA 11.8+
+After downloading the checkpoint, generate volumes with:
 
 ```bash
-# Create conda environment
-conda create -n prdit python=3.10
-conda activate prdit
-
-# Install PyTorch
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-pip install -r requirements.txt
+python sample.py \
+  --config lidc.yaml \
+  --ckpt {DOWNLOADED_STAGE2_CHECKPOINT} \
+  --solver euler \
+  --num-sampling-steps 100 \
+  --total-samples {NUM_SAMPLES} \
+  --output-dir {OUTPUT_DIR}
 ```
 
-## Install Dataset
+The model is unconditional (`num_classes: 1` is retained for configuration
+compatibility, while sampling passes no class label).
 
-We use **LIDC-IDRI** and **RAD-ChestCT** for our experiments.
+## Training
 
-Detailed dataset download, preprocessing, and split-generation instructions are
-available in [datasets/README.md](datasets/README.md).
+After following the baseline installation and dataset-preparation instructions:
 
-## Training from Scratch
-
-Use `--config {config_name}` to specify the config filename (e.g., `lidc.yaml`).
-
-The subdirectory (`configs/local/` or `configs/global/`) is automatically selected:
-`--from_scratch` resolves to `configs/local/{config_name}` (local denoiser);
-omitting it resolves to `configs/global/{config_name}` (global residual PRDiT).
-
-### Basic Training
 ```bash
-# Single GPU
-python train.py --config {config}
+# Stage 1: local denoiser
+torchrun --nproc_per_node={NUM_GPUS} train.py --config lidc.yaml --from_scratch
 
-# Multi-GPU
-torchrun --nproc_per_node=4 train.py --config {config}
-
-# Debug mode
-python train.py --config {config} --debug
+# Stage 2: global residual model
+# First set model.pretrained_path in configs/global/lidc.yaml.
+torchrun --nproc_per_node={NUM_GPUS} train.py --config lidc.yaml
 ```
-### Progressive Training
+
+The complete two-stage workflow can also be run with:
+
 ```bash
-# Stage 1: Train Local denoiser module (depth=0)
-# Set model.name: "PRDiT-B/12/0" in config
-python train.py --config {config} --from_scratch
-
-# Stage 2: Train Global Residual PRDiT (depth>0)
-# Set model.name: "PRDiT-B/12/4" in config
-# Set pretrained_path: "/path/to/stage1/checkpoint.pt"
-python train.py --config {config}
+bash scripts/run_flow_pipeline.sh
 ```
 
----
+## Sampling and solver sweeps
 
-## Sampling
+```bash
+# Generate 256³ volumes with Flow Matching.
+python sample.py \
+  --config lidc.yaml \
+  --ckpt {MODEL_CHECKPOINT} \
+  --solver euler \
+  --num-sampling-steps 100 \
+  --total-samples {NUM_SAMPLES} \
+  --output-dir {OUTPUT_DIR}
 
+# Compare solver/step settings.
+CKPT={MODEL_CHECKPOINT} bash scripts/solver_sweep_fm.sh
 ```
-# Basic sampling
-python sample.py --config {config} --ckpt $CKPT
 
-# Custom parameters
-python sample.py --config {config} --new --ckpt $CKPT --num-samples $SAMPLE_NUM --total-samples $STEP_NUM --output-dir $OUTPUT
-```
-**Output:** NIfTI files saved in specified directory.
+See `python sample.py --help` for the Heun, RK4, adaptive-Heun, `eta`, and
+error-target options. The scripts under `scripts/` provide calibration, runtime,
+matched-NFE, and FID sweep workflows.
 
-## 256³ Flow Matching Results
+## 128³ vs 256³ outputs
 
-The 256³ Flow Matching configuration uses the two-stage `PRDiT-B/16/*-s16`
-models and Euler ODE sampling. The examples below show the same generated
-volume at three solver budgets; each panel contains orthogonal CT views.
+The following unpaired samples use the same Euler 20-step sampler setting and
+show the saved `x0` orthogonal views. The 128³ outputs come from the recovered
+`solver_sweep/euler_steps_20` run; the 256³ outputs come from the successful
+256³ run. Rows are independent generated samples, not the same latent seed or
+the same anatomy.
+
+<table>
+  <tr>
+    <th>Resolution</th>
+    <th>Sample 1</th>
+    <th>Sample 2</th>
+    <th>Sample 3</th>
+  </tr>
+  <tr>
+    <th>128³<br>Euler 20</th>
+    <td><img src="assets/results/prdit128_fm_euler20_sample_1.png" alt="128 cubed output, sample 1"></td>
+    <td><img src="assets/results/prdit128_fm_euler20_sample_2.png" alt="128 cubed output, sample 2"></td>
+    <td><img src="assets/results/prdit128_fm_euler20_sample_3.png" alt="128 cubed output, sample 3"></td>
+  </tr>
+  <tr>
+    <th>256³<br>Euler 20</th>
+    <td><img src="assets/results/prdit256_fm_euler20_sample_1.png" alt="256 cubed output, sample 1"></td>
+    <td><img src="assets/results/prdit256_fm_euler20_sample_2.png" alt="256 cubed output, sample 2"></td>
+    <td><img src="assets/results/prdit256_fm_euler20_sample_3.png" alt="256 cubed output, sample 3"></td>
+  </tr>
+</table>
+
+| Output property | 128³ | 256³ | Difference |
+|---|---:|---:|---:|
+| Voxels per axis | 128 | 256 | 2× |
+| Voxels per volume | 2,097,152 | 16,777,216 | 8× |
+| Raw tensor memory at equal dtype/channels | 1× | 8× | 8× |
+| Euler sampling budget shown | 20 NFE | 20 NFE | Matched |
+
+The 256³ output provides twice the sampling density along each spatial axis and
+eight times as many voxels per volume. The examples visually expose the denser
+image grid, but they do not by themselves establish better distributional or
+clinical quality. A controlled comparison requires matched seeds/checkpoints
+and quantitative metrics such as 3D FID or MMD.
+
+## Recovered 256³ results
+
+The examples below show the same generated volume using three Euler budgets.
+Each image contains orthogonal views of the 256³ output.
 
 <table>
   <tr>
@@ -123,75 +158,30 @@ volume at three solver budgets; each panel contains orthogonal CT views.
     <th>100 steps / 100 NFE</th>
   </tr>
   <tr>
-    <td><img src="assets/results/prdit256_fm_euler_10_steps.png" alt="PRDiT 256 cubed Flow Matching sample with 10 Euler steps"></td>
-    <td><img src="assets/results/prdit256_fm_euler_50_steps.png" alt="PRDiT 256 cubed Flow Matching sample with 50 Euler steps"></td>
-    <td><img src="assets/results/prdit256_fm_euler_100_steps.png" alt="PRDiT 256 cubed Flow Matching sample with 100 Euler steps"></td>
+    <td><img src="assets/results/prdit256_fm_euler_10_steps.png" alt="256 cubed Flow Matching sample with 10 Euler steps"></td>
+    <td><img src="assets/results/prdit256_fm_euler_50_steps.png" alt="256 cubed Flow Matching sample with 50 Euler steps"></td>
+    <td><img src="assets/results/prdit256_fm_euler_100_steps.png" alt="256 cubed Flow Matching sample with 100 Euler steps"></td>
   </tr>
 </table>
 
-### Sampling-time sweep
+Each timing setting generated 10 volumes:
 
-The following measurements were recovered from the successful 256³ run. Each
-setting generated 10 volumes. Because the run did not record hardware details
-and the sample count is small, these numbers are included as an experiment log,
-not as a controlled performance benchmark.
+| Euler steps | NFE | Total time (s) | Time per volume (s) |
+|---:|---:|---:|---:|
+| 10 | 10 | 132 | 13.2 |
+| 20 | 20 | 108 | 10.8 |
+| 40 | 40 | 154 | 15.4 |
+| 50 | 50 | 147 | 14.7 |
+| 80 | 80 | 192 | 19.2 |
+| 100 | 100 | 222 | 22.2 |
 
-| Euler steps | NFE | Volumes | Total time (s) | Time per volume (s) |
-|---:|---:|---:|---:|---:|
-| 10 | 10 | 10 | 132 | 13.2 |
-| 20 | 20 | 10 | 108 | 10.8 |
-| 40 | 40 | 10 | 154 | 15.4 |
-| 50 | 50 | 10 | 147 | 14.7 |
-| 80 | 80 | 10 | 192 | 19.2 |
-| 100 | 100 | 10 | 222 | 22.2 |
+These timings were recovered from the successful 256³ run. Hardware metadata
+was not recorded and each setting contains only 10 samples, so the table is an
+experiment log rather than a controlled benchmark. No completed 3D FID/MMD
+summary was present in the recovered sample directory.
 
-These images are generated research outputs and are not intended for clinical
-use. Quantitative 3D FID/MMD results are not reported here because no completed
-metric summary was present in the recovered sample directory.
-
-## Evaluation
-
-### Compute metrics (3D FID, MMD, Wasserstein distance)
-
-The evaluation procedure runs as follows:
-
-**3D FID Score**
-
-```
-python evaluations/fid.py --dataset $DATASET --img_size $IMG_SIZE --data_root_real $DATA_ROOT_REAL --data_root_fake $DATA_ROOT_FAKE --pretrain_path $PRETRAIN_PATH
-```
-
-**3D MMD Score**
-
-```
-python evaluations/mmd.py --dataset $DATASET --img_size $IMG_SIZE --data_root_real $DATA_ROOT_REAL --data_root_fake $DATA_ROOT_FAKE --pretrain_path $PRETRAIN_PATH
-```
-
-**WGAN Critic**
-
-```bash
-# Train for Wasserstein distance
-python evaluations/wgan_gp.py --seed $SEED --save_path $SAVE_PATH --batch_size $BATCH_SIZE --img_size $IMG_SIZE --gpu_id $GPU_ID --dataset $DATASET --data_root_real $DATA_ROOT_REAL --data_root_fake_0 $DATA_ROOT_FAKE_0 --data_root_fake_1 $DATA_ROOT_FAKE_1 --train_size $TRAIN_SIZE --val_size $VAL_SIZE
-
-# Evaluate for Wasserstein distance
-python evaluations/wgan_gp.py --eval --seed $SEED --save_path $SAVE_PATH --batch_size $BATCH_SIZE --img_size $IMG_SIZE --gpu_id $GPU_ID --dataset $DATASET --data_root_real $DATA_ROOT_REAL --data_root_fake_0 $DATA_ROOT_FAKE_0 --data_root_fake_1 $DATA_ROOT_FAKE_1
-```
-
-## Citing
-
-If you find this work useful, please consider citing our paper:
-
-```bibtex
-@inproceedings{
-zhang2026pixellevel,
-title={Pixel-Level Residual Diffusion Transformer: Scalable 3D {CT} Volume Generation},
-author={Zhenkai Zhang and Markus Hiller and Krista A. Ehinger and Tom Drummond},
-booktitle={The Fourteenth International Conference on Learning Representations},
-year={2026},
-url={https://openreview.net/forum?id=bWtRZQ1rm2}
-}
-```
+Generated outputs are research artifacts and are not intended for clinical use.
 
 ## License
 
-This project is released under the [Apache License 2.0](LICENSE).
+This branch follows the baseline project's [Apache License 2.0](LICENSE).
