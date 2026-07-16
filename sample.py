@@ -1,7 +1,7 @@
-"""Inference script for sampling from a pre-trained IaNDiffusion model.
+"""Inference script for sampling from a pre-trained FlowMatching model.
 
-Generates 3-D CT volumes by running the reverse diffusion process and saves
-each batch as NIfTI files plus orthogonal-view PNGs via
+Generates 3-D CT volumes by integrating the flow-matching ODE from noise to
+data and saves each batch as NIfTI files plus orthogonal-view PNGs via
 :func:`~util.save_evaluation_samples`.
 
 Usage
@@ -21,7 +21,7 @@ import time
 
 import torch
 
-from diffusion.ian_diffusion import IaNDiffusion
+from diffusion.flow_matching import FlowMatching
 from utils.download import find_model
 from models import load_model
 from util import load_config, save_evaluation_samples
@@ -60,8 +60,8 @@ def sample(args: argparse.Namespace) -> None:
     model.eval()
     print(f"Loaded model from {args.ckpt}")
 
-    diffusion = IaNDiffusion(
-        timestep_respacing=str(args.num_sampling_steps),
+    diffusion = FlowMatching(
+        num_sampling_steps=args.num_sampling_steps,
         loss_type="l2",
     )
 
@@ -80,6 +80,7 @@ def sample(args: argparse.Namespace) -> None:
             torch.cuda.synchronize()
         t0 = time.time()
 
+        # Flow Matching prior: x_noise ~ N(0, I) at t = 0.
         z = torch.randn(
             current_batch_size,
             config.model.in_channels,
@@ -87,7 +88,7 @@ def sample(args: argparse.Namespace) -> None:
             config.data.image_size,
             config.data.image_size,
             device=device,
-        ) * 0.5
+        )
 
         model_kwargs = {"y": None} if config.model.num_classes else {}
         xs_samples, x0_samples = diffusion.p_sample_loop(
@@ -95,6 +96,9 @@ def sample(args: argparse.Namespace) -> None:
             z.shape,
             z,
             new_sampling=args.new,
+            solver=args.solver,
+            eta=args.eta,
+            err_target=args.err_target,
             model_kwargs=model_kwargs,
         )
 
@@ -130,7 +134,7 @@ def sample(args: argparse.Namespace) -> None:
 
 def get_argument_parser() -> argparse.ArgumentParser:
     """Build and return the CLI argument parser."""
-    parser = argparse.ArgumentParser(description="Sample 3-D CT volumes from a pre-trained IaNDiffusion model.")
+    parser = argparse.ArgumentParser(description="Sample 3-D CT volumes from a pre-trained FlowMatching model.")
     parser.add_argument("--config", type=str, required=True,
                         help="Config path relative to the project root (e.g. configs/global/my.yaml).")
     parser.add_argument("--ckpt", type=str, required=True,
@@ -139,12 +143,24 @@ def get_argument_parser() -> argparse.ArgumentParser:
                         help="Number of volumes to generate per batch (default: 4).")
     parser.add_argument("--total-samples", type=int, default=1000,
                         help="Total number of volumes to generate (default: 1000).")
-    parser.add_argument("--num-sampling-steps", type=int, default=1000,
-                        help="Number of DDPM reverse diffusion steps (default: 1000).")
+    parser.add_argument("--num-sampling-steps", type=int, default=100,
+                        help="Number of flow-matching ODE integration steps (default: 100).")
     parser.add_argument("--output-dir", type=str, default="samples",
                         help="Directory in which xs/ and x0/ sub-folders are created (default: samples).")
     parser.add_argument("--new", action="store_true",
-                        help="Use the new p_sample_loop sampling schema.")
+                        help="Use the 2nd-order Heun integrator instead of Euler.")
+    parser.add_argument("--solver", type=str, default=None,
+                        choices=["euler", "heun", "rk4", "pc", "pc_heun"],
+                        help="ODE integrator. Overrides --new when set. "
+                             "'rk4' is classic 4th-order Runge-Kutta (4 NFE/step); "
+                             "'pc' is a stochastic predictor-corrector (1 NFE/step, see --eta); "
+                             "'pc_heun' is a Heun corrector + err-gated adaptive noise (2 NFE/step).")
+    parser.add_argument("--eta", type=float, default=0.0,
+                        help="Stochastic-corrector strength in [0, 1] (eta_base for pc_heun). "
+                             "0 = deterministic (Euler for 'pc', plain Heun for 'pc_heun').")
+    parser.add_argument("--err-target", type=float, default=1.0,
+                        help="dt^2-normalised local-error gate for --solver pc_heun; noise "
+                             "saturates to eta once err reaches this (step-count independent).")
     return parser
 
 

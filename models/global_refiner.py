@@ -15,6 +15,7 @@ from typing import Callable, Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint as checkpoint
 from timm.models.vision_transformer import Mlp
 
 from models.classes import Attention
@@ -255,6 +256,7 @@ class FineRefiner(nn.Module):
         padding: int = 2,
         mlp_ratio: float = 4.0,
         flash_attn: bool = False,
+        grad_checkpoint: bool = False,
     ):
         """Initialize the stage-2 fine refinement branch.
 
@@ -287,9 +289,16 @@ class FineRefiner(nn.Module):
             MLP hidden-layer expansion factor in each block (default ``4.0``).
         flash_attn : bool, optional
             Enable FlashAttention in every :class:`DiTBlock` (default ``False``).
+        grad_checkpoint : bool, optional
+            Recompute each transformer block's activations during the backward
+            pass instead of storing them, trading extra compute for a large
+            reduction in activation memory. Essential for high token counts
+            (e.g. 32768 tokens at 256³) (default ``False``).
         """
         super().__init__()
         del num_patches, stride, padding
+
+        self.grad_checkpoint = grad_checkpoint
 
         logger.debug("FineRefiner: depth=%s, hidden_size=%s, num_heads=%s", depth, hidden_size, num_heads)
 
@@ -340,7 +349,12 @@ class FineRefiner(nn.Module):
         h = h + self.pos_embed
 
         for block in self.blocks:
-            h = block(h, c)
+            if self.grad_checkpoint and self.training:
+                # use_reentrant=False is required for compatibility with DDP
+                # static_graph and to correctly track the conditioning input `c`.
+                h = checkpoint.checkpoint(block, h, c, use_reentrant=False)
+            else:
+                h = block(h, c)
 
         return self.final_layer(h, c)
 

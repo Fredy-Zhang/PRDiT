@@ -2,8 +2,8 @@
 # Config the image_size and dataroot path within Input parameters
 
 data:
-  image_size: 128  # Size of input images [64 | 128 | 256]
-  path: ""  # Root directory containing lidc_preprocessed/
+  image_size: 256  # Size of input images [64 | 128 | 256]
+  path: "{LIDC_DATA_ROOT}"  # Root directory containing LIDC-IDRI-* volumes
   train_list: "lidc_data/train.txt"
   val_list: "lidc_data/val.txt"
   task: "lidc"      # Public task alias used by the dataset factory
@@ -13,18 +13,24 @@ data:
   normalize: True
 
 model:
-  name: "PRDiT-B/12/4"    # Model architecture name, B: 768, 12: patch size, 4: network depth
+  name: "PRDiT-B/16/12-s16"  # 256^3 stage-2: stride-16 tiling -> 16^3=4096 tokens (must match stage-1 geometry)
   num_classes: 1        # Number of classes for conditional generation
   in_channels: 1        # Number of input channels
-  out_channels: 2       # Number of output channels
-  pretrained_path: ""
+  out_channels: 1       # Velocity head: out_channels == in_channels (Flow Matching)
+  num_sampling_steps: 100  # Euler ODE steps used for generative evaluation
+  # Auto-filled by scripts/run_flow_pipeline.sh from the stage-1 run. For a manual
+  # stage-2 run, point this at results_lidc/<NNN>-PRDiT-B-16-0-s16/checkpoints/best_*.pt
+  pretrained_path: "{STAGE1_CHECKPOINT}"
   checkpoint: ""
   flash_attn: True
+  grad_checkpoint: True    # Recompute transformer activations in backward (needed at 256: ~32768 tokens)
 
 training:
-  batch_size: 64           # Global batch size for training
+  batch_size: 8            # Per-optimiser-step global batch (small: 256^3 stage-2 is memory-heavy)
+  grad_accum_steps: 4      # Accumulate 4 micro-batches -> effective batch size 32
+  amp: True                # bfloat16 autocast for the whole forward pass
   learning_rate: 8e-5      # Learning rate for AdamW optimizer
-  total_steps: 130000       # Total gradient updates (replaces epochs — dataset-size-agnostic)
+  total_steps: 130000       # Total optimiser updates (replaces epochs — dataset-size-agnostic)
   seed: 42                 # Random seed for reproducibility
   weight_decay: 0.0        # Weight decay for optimizer
   gradient_clip: 1.0
@@ -39,7 +45,7 @@ logging:
   eval_every: 1000  # Evaluate model every N epochs
 
 wandb:
-  project: ""    # Optional W&B project name; keep empty in public templates
-  entity: ""     # Optional W&B entity/username
-  tags: ""
-  enable: False
+  project: "{WANDB_PROJECT}"
+  entity: "{WANDB_ENTITY}"
+  tags: "lidc"
+  enable: False  # Set True after replacing the W&B placeholders above

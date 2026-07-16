@@ -14,6 +14,7 @@ Official implementation of **PRDiT** — *Pixel-Level Residual Diffusion Transfo
 - [Install Dataset](#install-dataset)
 - [Training](#training-from-scratch)
 - [Sampling](#sampling)
+- [256³ Flow Matching Results](#256-flow-matching-results)
 - [Evaluation](#evaluation)
 - [Citing](#citing)
 
@@ -108,6 +109,45 @@ python sample.py --config {config} --ckpt $CKPT
 python sample.py --config {config} --new --ckpt $CKPT --num-samples $SAMPLE_NUM --total-samples $STEP_NUM --output-dir $OUTPUT
 ```
 **Output:** NIfTI files saved in specified directory.
+
+## 256³ Flow Matching Results
+
+The 256³ Flow Matching configuration uses the two-stage `PRDiT-B/16/*-s16`
+models and Euler ODE sampling. The examples below show the same generated
+volume at three solver budgets; each panel contains orthogonal CT views.
+
+<table>
+  <tr>
+    <th>10 steps / 10 NFE</th>
+    <th>50 steps / 50 NFE</th>
+    <th>100 steps / 100 NFE</th>
+  </tr>
+  <tr>
+    <td><img src="assets/results/prdit256_fm_euler_10_steps.png" alt="PRDiT 256 cubed Flow Matching sample with 10 Euler steps"></td>
+    <td><img src="assets/results/prdit256_fm_euler_50_steps.png" alt="PRDiT 256 cubed Flow Matching sample with 50 Euler steps"></td>
+    <td><img src="assets/results/prdit256_fm_euler_100_steps.png" alt="PRDiT 256 cubed Flow Matching sample with 100 Euler steps"></td>
+  </tr>
+</table>
+
+### Sampling-time sweep
+
+The following measurements were recovered from the successful 256³ run. Each
+setting generated 10 volumes. Because the run did not record hardware details
+and the sample count is small, these numbers are included as an experiment log,
+not as a controlled performance benchmark.
+
+| Euler steps | NFE | Volumes | Total time (s) | Time per volume (s) |
+|---:|---:|---:|---:|---:|
+| 10 | 10 | 10 | 132 | 13.2 |
+| 20 | 20 | 10 | 108 | 10.8 |
+| 40 | 40 | 10 | 154 | 15.4 |
+| 50 | 50 | 10 | 147 | 14.7 |
+| 80 | 80 | 10 | 192 | 19.2 |
+| 100 | 100 | 10 | 222 | 22.2 |
+
+These images are generated research outputs and are not intended for clinical
+use. Quantitative 3D FID/MMD results are not reported here because no completed
+metric summary was present in the recovered sample directory.
 
 ## Evaluation
 

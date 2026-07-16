@@ -19,6 +19,7 @@ import glob
 import logging
 import os
 import random
+from contextlib import nullcontext
 from copy import deepcopy
 from time import time
 from typing import Any, Dict, Optional, Tuple
@@ -65,20 +66,42 @@ def train_step(
     model: torch.nn.Module,
     diffusion: Any,
     x: torch.Tensor,
-    optimizer: torch.optim.Optimizer,
-    ema: torch.nn.Module,
     device: torch.device,
-    gradient_clip: float,
+    use_amp: bool = False,
+    loss_scale: float = 1.0,
 ) -> Optional[Tuple[float, float, float]]:
-    """Perform one forward–backward–optimiser step.
+    """Run one forward + scaled-backward micro-step (no optimiser step).
 
-    Skips the step (returns ``None``) when the loss is non-finite or > 1e5.
+    The optimiser step, gradient clipping, EMA update, and ``zero_grad`` are
+    owned by the caller (:meth:`Trainer.train`) so that gradient accumulation
+    can span several micro-batches before a single update. When
+    ``loss_scale > 1`` several backward passes accumulate into ``param.grad``;
+    DDP all-reduces on every backward, which is slightly redundant but keeps the
+    gradient correct even if ranks skip different micro-batches on the (rare)
+    non-finite-loss guard.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        DDP-wrapped velocity model.
+    diffusion : FlowMatching
+        Generative process providing ``training_losses``.
+    x : torch.Tensor
+        Clean input volumes for this micro-batch.
+    device : torch.device
+        Target CUDA device.
+    use_amp : bool, optional
+        Run the forward pass under ``bfloat16`` autocast (default ``False``).
+    loss_scale : float, optional
+        Divisor applied to the loss before ``backward`` so that gradients
+        averaged over ``loss_scale`` micro-batches match a single large batch
+        (default ``1.0``).
 
     Returns
     -------
     tuple of float or None
         ``(total_loss, noise_loss, img_loss)`` as Python floats, or ``None``
-        when the loss is non-finite or exceeds ``1e5``.
+        when the loss is non-finite or exceeds ``1e5`` (backward is skipped).
     """
     global _data_range_logged
     if _data_range_logged:
@@ -88,30 +111,34 @@ def train_step(
         )
         _data_range_logged = False
 
-    t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-
-    optimizer.zero_grad(set_to_none=True)
-    loss_dict = diffusion.training_losses(model, x, t)
+    # Time sampling is owned by the generative process. Flow Matching draws
+    # t ~ U(0, 1) internally; no discrete DDPM timestep grid is used.
+    amp_ctx = (
+        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        if use_amp
+        else nullcontext()
+    )
+    with amp_ctx:
+        loss_dict = diffusion.training_losses(model, x)
 
     if isinstance(loss_dict, dict) and "noise_loss" in loss_dict and "img_loss" in loss_dict:
-        noise_loss = loss_dict["noise_loss"].mean()
-        img_loss   = loss_dict["img_loss"].mean()
+        noise_loss = loss_dict["noise_loss"].mean().float()
+        img_loss   = loss_dict["img_loss"].mean().float()
         total_loss = noise_loss + img_loss
     else:
-        total_loss = loss_dict["loss"].mean() if isinstance(loss_dict, dict) else loss_dict.mean()
+        raw = loss_dict["loss"] if isinstance(loss_dict, dict) else loss_dict
+        total_loss = raw.mean().float()
         noise_loss = img_loss = total_loss
 
-    total_loss_val = total_loss.detach().float().item()
+    total_loss_val = total_loss.detach().item()
     if not torch.isfinite(total_loss) or total_loss_val > 1e5:
         return None
 
-    total_loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
-    optimizer.step()
+    # bfloat16 has the same exponent range as float32, so no GradScaler is
+    # needed; scaling by `loss_scale` keeps accumulated gradients unbiased.
+    (total_loss / loss_scale).backward()
 
-    model_module = model.module if hasattr(model, "module") else model
-    update_ema(ema, model_module)
-    return total_loss_val, noise_loss.detach().float().item(), img_loss.detach().float().item()
+    return total_loss_val, noise_loss.detach().item(), img_loss.detach().item()
 
 
 # =============================================================================
@@ -137,8 +164,8 @@ def _evaluate_reconstruction(
         The model (or EMA shadow) to evaluate.
     val_loader : DataLoader
         Validation data loader.
-    diffusion : IaNDiffusion
-        Diffusion object providing ``q_sample``.
+    diffusion : FlowMatching
+        Generative process providing ``predict_x_data``.
     device : torch.device
         Target CUDA device.
     experiment_dir : str
@@ -158,19 +185,15 @@ def _evaluate_reconstruction(
     eval_loss = 0.0
     num_batches = 0
 
+    inner = model.module if hasattr(model, "module") else model
+
     with torch.no_grad():
         for i, batch in enumerate(val_loader):
             x = batch["image"].to(device, non_blocking=True)
-            t = torch.full((x.shape[0],), 100, device=device)
-            samples = diffusion.q_sample(x, t)
 
-            model_output = model(samples, t)
-            if isinstance(model_output, tuple):
-                model_output = model_output[0]
-            if model_output.shape[1] > x.shape[1]:
-                _, img_recon = model_output.chunk(2, dim=1)
-            else:
-                img_recon = model_output
+            # Flow Matching: recover the data estimate from the predicted
+            # velocity at a fixed mid-path time, x_data_hat = x_t + (1-t) * v.
+            img_recon, _ = diffusion.predict_x_data(inner, x, t_value=0.5)
 
             eval_loss += (img_recon - x).pow(2).mean().item()
             num_batches += 1
@@ -231,11 +254,12 @@ def _evaluate_generative(
     os.makedirs(xs_path, exist_ok=True)
     os.makedirs(x0_path, exist_ok=True)
 
-    z = torch.randn(num_samples, 1, image_size, image_size, image_size, device=device) * 0.5
+    # Flow Matching prior: x_noise ~ N(0, I) at t = 0.
+    z = torch.randn(num_samples, 1, image_size, image_size, image_size, device=device)
 
     with torch.no_grad():
         xs_samples, x0_samples = diffusion.p_sample_loop(
-            model.forward, z.shape, z, new_sampling=True, model_kwargs={},
+            model.forward, z.shape, z, new_sampling=False, model_kwargs={},
         )
 
     xs_final = xs_samples[-1]
@@ -401,12 +425,18 @@ class Trainer:
         self.ema = deepcopy(self.model).to(self.device)
         requires_grad(self.ema, False)
 
+        # Gradient accumulation uses model.no_sync() on intermediate micro-steps,
+        # which is incompatible with DDP static_graph; only enable static_graph
+        # when there is exactly one backward per optimiser step.
+        self.grad_accum_steps = max(1, int(getattr(self.config.training, "grad_accum_steps", 1)))
+        self.use_amp = bool(getattr(self.config.training, "amp", False))
+
         self.model = torch.nn.parallel.DistributedDataParallel(
             self.model,
             device_ids=[self.rank],
             find_unused_parameters=False,
             gradient_as_bucket_view=True,
-            static_graph=True,
+            static_graph=(self.grad_accum_steps == 1),
         )
 
         self.diffusion = loading_diffusion(self.config, rank=self.rank)
@@ -541,34 +571,30 @@ class Trainer:
         if self.is_distributed:
             dist.barrier()
 
-        # Resolve total training steps.
-        # Prefer total_steps if set; fall back to epochs × steps-per-epoch so
-        # old configs keep working.  Using steps (not epochs) as the primary
-        # control makes training dataset-size-agnostic: the same total_steps
-        # value gives identical gradient-update budgets regardless of how many
-        # samples the dataset contains.
-        total_steps_target = getattr(self.config.training, "total_steps", None)
-        if total_steps_target is None:
-            steps_per_epoch = len(self.train_loader)
-            total_steps_target = self.config.training.epochs * steps_per_epoch
-            if self.rank == 0:
-                self.logger.info(
-                    f"'total_steps' not configured — derived {total_steps_target:,} steps "
-                    f"from {self.config.training.epochs} epochs × "
-                    f"{steps_per_epoch} steps/epoch."
-                )
+        # Training is driven purely by gradient-update steps. Using steps makes
+        # the budget dataset-size-agnostic: the same total_steps value gives an
+        # identical number of optimiser updates regardless of dataset size.
+        total_steps_target = self.config.training.total_steps
 
+        accum = self.grad_accum_steps
         if self.rank == 0:
+            eff_bs = self.config.training.batch_size * accum
             self.logger.info(
-                f"Training on {self.world_size} GPU(s) for {total_steps_target:,} total steps."
+                f"Training on {self.world_size} GPU(s) for {total_steps_target:,} optimiser "
+                f"steps | grad_accum={accum} | amp={'bf16' if self.use_amp else 'off'} | "
+                f"effective batch size={eff_bs}."
             )
 
         train_steps = 0
         log_steps   = 0
+        log_micros  = 0  # successful micro-batches since the last log flush
         running_loss = running_noise_loss = running_img_loss = 0.0
         start_time   = time()
         gradient_clip = self.args.gradient_clip
         epoch = 0
+        micro_count = 0  # successful micro-batches in the current accumulation window
+
+        self.optimizer.zero_grad(set_to_none=True)
 
         try:
             while train_steps < total_steps_target:
@@ -583,32 +609,45 @@ class Trainer:
                         self.model,
                         self.diffusion,
                         batch["image"].to(self.device, non_blocking=True),
-                        self.optimizer,
-                        self.ema,
                         self.device,
-                        gradient_clip,
+                        use_amp=self.use_amp,
+                        loss_scale=accum,
                     )
 
                     if result is None:
                         if self.rank == 0:
-                            self.logger.warning("Skipping step: invalid loss.")
+                            self.logger.warning("Skipping micro-batch: invalid loss.")
                         continue
 
                     total_loss, noise_loss, img_loss = result
                     running_loss       += total_loss
                     running_noise_loss += noise_loss
                     running_img_loss   += img_loss
+                    micro_count += 1
+                    log_micros  += 1
+
+                    # Only complete an optimiser update once a full accumulation
+                    # window of micro-batches has contributed gradients.
+                    if micro_count < accum:
+                        continue
+
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip)
+                    self.optimizer.step()
+                    self.optimizer.zero_grad(set_to_none=True)
+                    update_ema(self.ema, self.model.module)
+                    micro_count = 0
+
                     log_steps   += 1
                     train_steps += 1
 
-                    if train_steps % self.config.logging.log_every == 0 and log_steps > 0:
+                    if train_steps % self.config.logging.log_every == 0 and log_micros > 0:
                         elapsed       = time() - start_time
                         steps_per_sec = log_steps / max(elapsed, 1e-8)
 
                         stats = torch.tensor(
                             [running_loss, running_noise_loss, running_img_loss],
                             device=self.device, dtype=torch.float32,
-                        ) / log_steps
+                        ) / log_micros
                         if dist.is_initialized() and self.world_size > 1:
                             dist.all_reduce(stats, op=dist.ReduceOp.SUM)
                             stats /= self.world_size
@@ -633,6 +672,7 @@ class Trainer:
 
                         running_loss = running_noise_loss = running_img_loss = 0.0
                         log_steps  = 0
+                        log_micros = 0
                         start_time = time()
 
                 # -- End-of-epoch hooks ---------------------------------------

@@ -10,20 +10,24 @@ Adapted from OpenAI's diffusion repositories:
 - IDDPM: https://github.com/openai/improved-diffusion
 """
 
-from . import gaussian_diffusion as gd
+from .flow_matching import FlowMatching
 from .ian_diffusion import IaNDiffusion
-from .respace import SpacedDiffusion, space_timesteps
+
+# NOTE: ``gaussian_diffusion`` / ``SpacedDiffusion`` (the legacy Gaussian
+# path) are imported lazily inside ``create_diffusion`` so that the default
+# flow-matching path (out_channels==1) does not depend on them.
 
 
 DEFAULT_TIMESTEP_RESPACING = "1000"
 
 
 def loading_diffusion(config, rank: int = 0):
-    """Instantiate the correct diffusion model from the experiment config.
+    """Instantiate the correct generative process from the experiment config.
 
-    Selects :class:`~diffusion.ian_diffusion.IaNDiffusion` when
-    ``config.model.out_channels == 2``; otherwise builds a standard
-    :class:`SpacedDiffusion`.
+    Selects :class:`~diffusion.flow_matching.FlowMatching` (single velocity
+    head) when ``config.model.out_channels == 1`` — the default method for this
+    project. ``out_channels == 2`` keeps the legacy dual-head
+    :class:`~diffusion.ian_diffusion.IaNDiffusion` for reference.
 
     Parameters
     ----------
@@ -34,23 +38,20 @@ def loading_diffusion(config, rank: int = 0):
 
     Returns
     -------
-    IaNDiffusion or SpacedDiffusion
-        Configured diffusion instance.
+    FlowMatching or IaNDiffusion
+        Configured generative-process instance.
     """
     out_channels = config.model.out_channels
 
     if out_channels == 1:
+        num_steps = int(getattr(config.model, "num_sampling_steps", 100))
         if rank == 0:
-            print("Loading the standard diffusion model")
-        return create_diffusion(
-            noise_schedule=config.data.schedule_type,
-            learn_sigma=False,
-            timestep_respacing=DEFAULT_TIMESTEP_RESPACING,
-        )
+            print(f"Loading the FlowMatching process (velocity head, {num_steps} sampling steps)")
+        return FlowMatching(num_sampling_steps=num_steps, loss_type="l2")
 
     if out_channels == 2:
         if rank == 0:
-            print("Loading the IaNDiffusion model")
+            print("Loading the legacy IaNDiffusion model (dual image+noise head)")
         return IaNDiffusion(
             timestep_respacing=DEFAULT_TIMESTEP_RESPACING,
             loss_type="l2",
@@ -96,6 +97,9 @@ def create_diffusion(
     SpacedDiffusion
         Configured diffusion instance.
     """
+    from . import gaussian_diffusion as gd
+    from .respace import SpacedDiffusion, space_timesteps
+
     betas = gd.get_named_beta_schedule(noise_schedule, diffusion_steps)
 
     if use_kl:

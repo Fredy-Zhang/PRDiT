@@ -11,11 +11,14 @@ import sys
 import torch
 from torch import nn
 
-# Add the 'eval' directory to the Python path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Import resnet from the local models directory by explicit file path, to avoid
+# colliding with the project-root `models` package (PRDiT) that shares the name.
+import importlib.util
 
-# Import resnet from the local models directory
-from eval.models import resnet
+_resnet_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "resnet.py")
+_spec = importlib.util.spec_from_file_location("eval_resnet", _resnet_path)
+resnet = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(resnet)
 
 
 def generate_model(opt):

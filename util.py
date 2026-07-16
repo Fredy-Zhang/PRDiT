@@ -133,7 +133,7 @@ class Args:
         self.results_dir = config.output.results_dir
         self.model = config.model.name
         self.num_classes = config.model.num_classes
-        self.epochs = config.training.epochs
+        self.total_steps = config.training.total_steps
         self.global_batch_size = config.training.batch_size
         self.global_seed = config.training.seed
         self.num_workers = config.data.num_workers
@@ -346,7 +346,7 @@ def setup_wandb(config: Config, rank: int) -> None:
             "image_size": config.data.image_size,
             "batch_size": config.training.batch_size,
             "learning_rate": config.training.learning_rate,
-            "epochs": config.training.epochs,
+            "total_steps": config.training.total_steps,
             "num_workers": config.data.num_workers,
             "seed": config.training.seed,
             "val_frac": config.data.val_frac,

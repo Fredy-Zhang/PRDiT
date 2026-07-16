@@ -194,7 +194,8 @@ def check_data_range_compatibility(real_data, fake_data, dataset_name, num_sampl
     print(f"Checking data range compatibility for {dataset_name}")
     print(f"{'='*60}")
 
-    sample_indices = np.linspace(0, len(real_data) - 1, min(num_samples, len(real_data)), dtype=int)
+    def _indices(dataset):
+        return np.linspace(0, len(dataset) - 1, min(num_samples, len(dataset)), dtype=int)
 
     def _get_sample(dataset, idx, dataset_name, mode):
         if dataset_name == 'rad_chestCT':
@@ -218,8 +219,8 @@ def check_data_range_compatibility(real_data, fake_data, dataset_name, num_sampl
                 maxs.append(float(np.max(s)))
         return min(mins), max(maxs)
 
-    real_min, real_max = _minmax(real_data, sample_indices, dataset_name, 'real')
-    fake_min, fake_max = _minmax(fake_data, sample_indices, dataset_name, 'fake')
+    real_min, real_max = _minmax(real_data, _indices(real_data), dataset_name, 'real')
+    fake_min, fake_max = _minmax(fake_data, _indices(fake_data), dataset_name, 'fake')
 
     print(f"Real data range:  min={real_min:.5f}, max={real_max:.5f}")
     print(f"Fake data range:  min={fake_min:.5f}, max={fake_max:.5f}")
@@ -269,6 +270,8 @@ def parse_opts():
     parser.add_argument('--pretrain_path', required=True, type=str, help='Path to pretrained 3D ResNet-50 weights')
     parser.add_argument('--path_to_activations', required=True, type=str, help='Directory to save activation stats')
     parser.add_argument('--num_samples', default=1000, type=int, help='Number of volumes for FID computation')
+    parser.add_argument('--reuse_real_stats', action='store_true',
+                        help='Reuse cached mu_real.npy/sigma_real.npy in --path_to_activations and skip the real preload (for sampler ablations sharing one real reference)')
     parser.add_argument('--batch_size', default=1, type=int)
     parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--manual_seed', default=192, type=int)
@@ -300,33 +303,44 @@ if __name__ == '__main__':
     model = get_feature_extractor(sets)
     model = model.to(device)
 
-    print("Initializing dataloaders...")
-    if sets.dataset == 'rad_chestCT':
-        real_data = RADChestCTDataset(sets.data_root_real, img_size=sets.img_size, mode="real", split_dir=sets.split_dir)
-        fake_data = RADChestCTDataset(sets.data_root_fake, img_size=sets.img_size, mode="fake")
-        print(f"Real: {len(real_data)} samples | Fake: {len(fake_data)} samples")
-    elif sets.dataset == 'lidc-idri':
-        real_data = LIDCVolumes(sets.data_root_real, img_size=sets.img_size, mode='real', split_dir=sets.split_dir)
-        fake_data = LIDCVolumes(sets.data_root_fake, img_size=sets.img_size, mode='fake')
-        print(f"Real: {len(real_data)} samples | Fake: {len(fake_data)} samples")
-    else:
+    def _build_dataset(root, mode):
+        if sets.dataset == 'rad_chestCT':
+            kw = {"split_dir": sets.split_dir} if mode == "real" else {}
+            return RADChestCTDataset(root, img_size=sets.img_size, mode=mode, **kw)
+        elif sets.dataset == 'lidc-idri':
+            kw = {"split_dir": sets.split_dir} if mode == "real" else {}
+            return LIDCVolumes(root, img_size=sets.img_size, mode=mode, **kw)
         raise ValueError(f"Unsupported dataset: {sets.dataset}. Use 'rad_chestCT' or 'lidc-idri'.")
 
-    check_data_range_compatibility(real_data, fake_data, sets.dataset, num_samples=5, tolerance=0.1)
+    mu_real_path = os.path.join(sets.path_to_activations, 'mu_real.npy')
+    sigma_real_path = os.path.join(sets.path_to_activations, 'sigma_real.npy')
+    reuse_real = sets.reuse_real_stats and os.path.exists(mu_real_path) and os.path.exists(sigma_real_path)
 
-    real_loader = DataLoader(real_data, batch_size=sets.batch_size, shuffle=False,
-                             num_workers=sets.num_workers, pin_memory=False)
+    print("Initializing dataloaders...")
+    fake_data = _build_dataset(sets.data_root_fake, "fake")
+
+    if reuse_real:
+        # The real reference is identical across sampler ablations; skip the
+        # expensive real preload + feature extraction and reuse cached stats.
+        print(f"Reusing cached real stats from {sets.path_to_activations} (skipping real preload).")
+        mu_real, sigma_real = np.load(mu_real_path), np.load(sigma_real_path)
+        print(f"Fake: {len(fake_data)} samples")
+    else:
+        real_data = _build_dataset(sets.data_root_real, "real")
+        print(f"Real: {len(real_data)} samples | Fake: {len(fake_data)} samples")
+        check_data_range_compatibility(real_data, fake_data, sets.dataset, num_samples=5, tolerance=0.1)
+        real_loader = DataLoader(real_data, batch_size=sets.batch_size, shuffle=False,
+                                 num_workers=sets.num_workers, pin_memory=False)
+        print(f"Computing 3D FID with {sets.num_samples} samples (seed={sets.manual_seed})...")
+        print("Extracting real activations...")
+        activations_real = get_activations(model, real_loader, sets, device)
+        mu_real, sigma_real = process_feature_vecs(activations_real)
+        np.save(mu_real_path, mu_real)
+        np.save(sigma_real_path, sigma_real)
+        print(f"Real activations: {activations_real.shape}")
+
     fake_loader = DataLoader(fake_data, batch_size=sets.batch_size, shuffle=False,
                              num_workers=sets.num_workers, pin_memory=False)
-
-    print(f"Computing 3D FID with {sets.num_samples} samples (seed={sets.manual_seed})...")
-
-    print("Extracting real activations...")
-    activations_real = get_activations(model, real_loader, sets, device)
-    mu_real, sigma_real = process_feature_vecs(activations_real)
-    np.save(os.path.join(sets.path_to_activations, 'mu_real.npy'), mu_real)
-    np.save(os.path.join(sets.path_to_activations, 'sigma_real.npy'), sigma_real)
-    print(f"Real activations: {activations_real.shape}")
 
     print("Extracting fake activations...")
     activations_fake = get_activations(model, fake_loader, sets, device)

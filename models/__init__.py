@@ -58,6 +58,36 @@ SPECIAL_MODEL_VARIANTS = (
         "num_heads": 6,
         "mlp_ratio": 4.0,
     },
+    # ------------------------------------------------------------------
+    # 256^3 low-token variants (stride 16, non-overlapping 16^3 patches).
+    #
+    # The standard grid uses stride 8, which at input 256 yields a
+    # 32^3 = 32768-token sequence for the stage-2 transformer — a 64x
+    # attention-cost blow-up vs. 128^3. These variants use stride 16 so the
+    # grid is 256/16 = 16 -> 16^3 = 4096 tokens, back to the 128^3 regime,
+    # while the cheap per-patch coarse MLP still runs at full resolution.
+    # extract_patch == stride == 16 tiles the volume exactly (padding 0).
+    # ------------------------------------------------------------------
+    {
+        "name": "PRDiT-B/16/0-s16",
+        "size": "B",
+        "patch_size": 16,
+        "depth": 0,
+        "stride": 16,
+        "padding": 0,
+        "num_heads": 12,
+        "mlp_ratio": 4.0,
+    },
+    {
+        "name": "PRDiT-B/16/12-s16",
+        "size": "B",
+        "patch_size": 16,
+        "depth": 12,
+        "stride": 16,
+        "padding": 0,
+        "num_heads": 12,
+        "mlp_ratio": 4.0,
+    },
 )
 
 
@@ -168,6 +198,7 @@ def load_model(config):
         num_classes=config.model.num_classes,
         learn_sigma=(config.model.out_channels == 2),
         flash_attn=config.model.flash_attn,
+        grad_checkpoint=getattr(config.model, "grad_checkpoint", False),
     )
 
 

@@ -75,7 +75,7 @@ class IaNDiffusion:
         self,
         model: torch.nn.Module,
         x_start: torch.Tensor,
-        t: torch.Tensor,
+        t: Optional[torch.Tensor] = None,
         model_kwargs: Optional[Dict] = None,
     ) -> Dict[str, torch.Tensor]:
         """Compute per-sample image and noise reconstruction losses.
@@ -99,6 +99,8 @@ class IaNDiffusion:
         """
         if model_kwargs is None:
             model_kwargs = {}
+        if t is None:
+            t = torch.randint(0, self.num_timesteps, (x_start.shape[0],), device=x_start.device)
 
         noise = self.gen_noise(x_start)
         x_t = self.q_sample(x_start=x_start, t=t, noise=noise)

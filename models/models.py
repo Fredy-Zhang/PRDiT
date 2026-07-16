@@ -133,6 +133,7 @@ class PRDiT(nn.Module):
         num_classes: int = 1,
         learn_sigma: bool = False,
         flash_attn: bool = False,
+        grad_checkpoint: bool = False,
     ):
         """Initialize the PRDiT model.
 
@@ -167,6 +168,9 @@ class PRDiT(nn.Module):
         flash_attn : bool, optional
             Enable FlashAttention in stage-2 transformer blocks (default
             ``False``).
+        grad_checkpoint : bool, optional
+            Enable activation checkpointing in stage-2 transformer blocks to
+            reduce activation memory at high token counts (default ``False``).
         """
         super().__init__()
         del class_dropout_prob, num_classes
@@ -232,6 +236,7 @@ class PRDiT(nn.Module):
                 padding=padding,
                 mlp_ratio=mlp_ratio,
                 flash_attn=flash_attn,
+                grad_checkpoint=grad_checkpoint,
             )
 
         self.initialize_weights()

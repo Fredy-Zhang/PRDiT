@@ -84,7 +84,17 @@ class LIDCVolumes(torch.utils.data.Dataset):
         self.directory = str(Path(directory).expanduser())
         self.img_size = img_size
         self.augment = augment
-        self.normalize = normalize if normalize is not None else (lambda x: 2 * x - 1)
+        # Real LIDC volumes are stored in [0, 1] and mapped to [-1, 1] via 2x-1.
+        # Generated ('fake') volumes are already saved in the model's [-1, 1]
+        # space, so re-applying 2x-1 would double-normalize them; use identity.
+        if normalize is not None:
+            self.normalize = normalize
+        elif mode == "fake":
+            # Already in [-1, 1]; clamp the generator's slight overshoot back to
+            # the physical range that real (normalized) CT occupies.
+            self.normalize = lambda x: x.clamp(-1.0, 1.0)
+        else:
+            self.normalize = lambda x: 2 * x - 1
         self.data_cache = {}
         self.database = []
 
@@ -200,16 +210,19 @@ class LIDCVolumes(torch.utils.data.Dataset):
                 nib_img = nibabel.load(name)
                 out = torch.from_numpy(nib_img.get_fdata()).float()
 
-                if out.ndim == 3:
-                    image = torch.zeros(1, 256, 256, 256)
-                    image[0, :, :, :] = out
-                else:
-                    image = out
+                image = out.unsqueeze(0) if out.ndim == 3 else out
 
-                if self.img_size == 128:
-                    image = nn.AvgPool3d(2)(image.unsqueeze(0)).squeeze(0)
-                elif self.img_size == 64:
-                    image = nn.AvgPool3d(4)(image.unsqueeze(0)).squeeze(0)
+                # Downsample from the volume's native resolution to img_size.
+                # Real LIDC volumes are stored at 256^3; generated samples are
+                # already at the model's img_size, so the factor may be 1.
+                src = image.shape[-1]
+                if src % self.img_size != 0:
+                    raise ValueError(
+                        f"Volume edge {src} is not a multiple of img_size {self.img_size}: {name}"
+                    )
+                factor = src // self.img_size
+                if factor > 1:
+                    image = nn.AvgPool3d(factor)(image.unsqueeze(0)).squeeze(0)
 
                 self.data_cache[name] = self.normalize(image)
 
