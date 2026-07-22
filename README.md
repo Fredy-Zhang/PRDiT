@@ -96,6 +96,31 @@ python train.py --config {config} --from_scratch
 python train.py --config {config}
 ```
 
+### Stage 3: High-Resolution Refinement
+
+Stage 3 refines a trained stage-1+2 PRDiT checkpoint up to a higher target
+resolution (e.g. 128 &rarr; 256): the input is downsampled, denoised by the
+base model, upsampled back (nearest for the noise channel, trilinear for the
+image channel), and corrected by a lightweight local MLP head trained at the
+target resolution. Configs live under `configs/sr/`.
+
+```bash
+# Stage 3a: Train the SR head on top of a frozen Stage-2 checkpoint
+# Set base_model.checkpoint: "/path/to/stage2/checkpoint.pt" in configs/sr/lidc.yaml
+python train_sr.py --config lidc.yaml
+
+# Stage 3b: Jointly fine-tune the whole stack at a very low learning rate
+# Set sr_model.resume_checkpoint to Stage 3a's best checkpoint in configs/sr/lidc_finetune.yaml
+python train_sr.py --config lidc_finetune.yaml
+```
+
+Sampling from a trained stage-3 model works the same way as `sample.py`, at
+the SR target resolution:
+
+```bash
+python sample_sr.py --config lidc.yaml --ckpt $CKPT --num-samples $SAMPLE_NUM --total-samples $STEP_NUM --output-dir $OUTPUT
+```
+
 ---
 
 ## Sampling

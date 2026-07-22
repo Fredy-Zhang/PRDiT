@@ -184,26 +184,27 @@ class IaNDiffusion:
 
         n = x.size(0)
         seq_next = [0] + list(seq[:-1])
-        x0_preds, xs = [], [x]
+        xt = x
+        img_recon = None
 
+        # Only the final step's tensors are ever used by callers (see
+        # p_sample_loop and every caller of it) — keeping every intermediate
+        # step alive on CPU (as the previous implementation did) grows
+        # linearly with resolution^3 * timesteps and OOMs at 256^3.
         for i, j in zip(reversed(seq), reversed(seq_next)):
             t      = torch.full((n,), i, device=x.device)
             next_t = torch.full((n,), j, device=x.device)
             at      = (1 - (t      / self.num_timesteps)[:, None, None, None, None])
             next_at = (1 - (next_t / self.num_timesteps)[:, None, None, None, None])
 
-            xt = xs[-1].to(x.device)
             eps_recon, img_recon = model(xt, t, **model_kwargs).chunk(2, dim=1)
 
-            xt_next = xt - (at - next_at) * self._half_pi * (
+            xt = xt - (at - next_at) * self._half_pi * (
                 torch.cos(at * self._half_pi) * img_recon
                 - torch.sin(at * self._half_pi) * eps_recon
             )
 
-            x0_preds.append(img_recon.cpu())
-            xs.append(xt_next.cpu())
-
-        return x0_preds, xs
+        return [img_recon.cpu()], [xt.cpu()]
 
     @torch.no_grad()
     def _predictor_corrector_steps(
@@ -224,14 +225,17 @@ class IaNDiffusion:
         p = 2
         n = x.size(0)
         seq_next = [0] + list(seq[:-1])
-        xs, x0_preds = [x], []
+        xt = x
         device = x.device
+        x0_t = None
 
+        # See _generalized_steps: only the final step is ever consumed by
+        # callers, so we track a single running tensor instead of a full
+        # per-timestep history (which OOMs host RAM at 256^3).
         for i, j in zip(reversed(seq), reversed(seq_next)):
             t = torch.full((n,), i, device=device)
             h = (j - i) * self._step_w  # negative step size
 
-            xt = xs[-1].to(device)
             et, x0_t = model(xt, t, **model_kwargs).chunk(2, dim=1)
 
             beta_t = (t / self.num_timesteps)[..., None, None, None, None] * self._half_pi
@@ -250,11 +254,8 @@ class IaNDiffusion:
                 alpha_1 = torch.sqrt(torch.clamp(1 - alpha ** 2, min=0.0))
 
                 # Corrector: stochastic re-injection to land at t_corr.
-                xt_next = alpha * xt_pred + alpha_1 * self.gen_noise(xt_pred)
+                xt = alpha * xt_pred + alpha_1 * self.gen_noise(xt_pred)
             else:
-                xt_next = xt - h * f_t
+                xt = xt - h * f_t
 
-            x0_preds.append(x0_t.cpu())
-            xs.append(xt_next.cpu())
-
-        return x0_preds, xs
+        return [x0_t.cpu()], [xt.cpu()]

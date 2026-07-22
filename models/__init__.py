@@ -203,3 +203,8 @@ def register_special_prdit_models() -> None:
 
 register_all_prdit_models()
 register_special_prdit_models()
+
+# Stage-3 (super-resolution) loader. Imported last, and deferred inside
+# `load_sr_model` itself, to avoid a package-init import cycle: sr_pipeline
+# looks up `PRDiT_models` (defined above) only when `load_sr_model` is called.
+from models.sr_pipeline import load_sr_model  # noqa: E402
