@@ -72,12 +72,12 @@ available in [datasets/README.md](datasets/README.md).
 We release the final (stage 2) checkpoints for 3D CT volume generation. LIDC-IDRI
 checkpoints are available now; RAD-ChestCT weights are coming soon.
 
-| Dataset | Model | Hidden size | Global blocks | Volume size (voxels) | Configuration | Download |
-| --- | --- | :---: | :---: | :---: | --- | --- |
-| LIDC-IDRI | PRDiT-B/12/4 | 768 | 4 | 128 × 128 × 128 | [lidc.yaml](configs/global/lidc.yaml) | [Google Drive](https://drive.google.com/file/d/1uTQdBGD2xU4L2JGTjWkDG7j2ZXLyEjuw/view?usp=drive_link) |
-| LIDC-IDRI | PRDiT-B/12/8 | 768 | 8 | 128 × 128 × 128 | [lidc.yaml](configs/global/lidc.yaml) | [Google Drive](https://drive.google.com/file/d/1zMbG30PQwVNJj-wjT-EmzL8qoEXnYVDU/view?usp=drive_link) |
-| LIDC-IDRI | PRDiT-B/12/12 | 768 | 12 | 128 × 128 × 128 | [lidc.yaml](configs/global/lidc.yaml) | [Google Drive](https://drive.google.com/file/d/1XXKRAONiAeyxvTbpbgrLNP87KFFYMEKX/view?usp=drive_link) |
-| RAD-ChestCT | PRDiT-XL/12/4 | 1152 | 4 | 128 × 128 × 128 | [rad.yaml](configs/global/rad.yaml) | Coming soon |
+| Dataset | Model | Resolution | Config | Weights |
+| :--- | :--- | :---: | :---: | :---: |
+| LIDC-IDRI | `PRDiT-B/12/4` | 128³ | [lidc.yaml](configs/global/lidc.yaml) | [Download](https://drive.google.com/file/d/1uTQdBGD2xU4L2JGTjWkDG7j2ZXLyEjuw/view?usp=drive_link) |
+| LIDC-IDRI | `PRDiT-B/12/8` | 128³ | [lidc.yaml](configs/global/lidc.yaml) | [Download](https://drive.google.com/file/d/1zMbG30PQwVNJj-wjT-EmzL8qoEXnYVDU/view?usp=drive_link) |
+| LIDC-IDRI | `PRDiT-B/12/12` | 128³ | [lidc.yaml](configs/global/lidc.yaml) | [Download](https://drive.google.com/file/d/1XXKRAONiAeyxvTbpbgrLNP87KFFYMEKX/view?usp=drive_link) |
+| RAD-ChestCT | `PRDiT-XL/12/4` | 128³ | [rad.yaml](configs/global/rad.yaml) | *Coming soon* |
 
 Model names follow `PRDiT-{size}/{patch size}/{depth}`: `size` sets the transformer
 hidden size (`B` = 768, `XL` = 1152), `patch size` is the edge length of the extracted
