@@ -135,8 +135,7 @@ $\hat x_0^{\mathrm{LR}}$ is the frozen base model's image prediction at the
 base resolution (detached). The term acts on the image (clean-signal)
 prediction only: it lets the refinement add detail that is invisible at the
 base resolution while keeping the large-scale appearance of the base model's
-prediction. The noise prediction is not constrained. It has not been tuned;
-no recommended $\lambda_{\mathrm{LF}}$ is given.
+prediction. The noise prediction is not constrained.
 
 Sampling from a trained stage-3 model works the same way as `sample.py`, at
 the SR target resolution:
