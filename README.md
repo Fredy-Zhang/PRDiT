@@ -114,6 +114,12 @@ python train_sr.py --config lidc.yaml
 python train_sr.py --config lidc_finetune.yaml
 ```
 
+**Training objective.** Stage 3 is trained with the same two-term objective as
+stages 1–2: the image MSE and the noise MSE, summed with equal weights
+(`diffusion/ian_diffusion.py`, `training_losses`). The PRDiT-4L ↑256 results in
+Table 2 of the paper were produced with this objective only; no additional
+low-frequency consistency loss was used.
+
 Sampling from a trained stage-3 model works the same way as `sample.py`, at
 the SR target resolution:
 
