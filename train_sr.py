@@ -70,15 +70,21 @@ def sr_train_step_lf(
     Objective::
 
         L    = ||x0_hr - x0||^2 + ||eps_hr - eps||^2 + lf_weight * L_LF
-        L_LF = ||D(x0_hr) - x0_lr||^2 + ||D(eps_hr) - eps_lr||^2
+        L_LF = ||D(x0_hr) - x0_lr||^2
 
-    where ``(eps_hr, x0_hr)`` is the full-resolution prediction,
-    ``(eps_lr, x0_lr)`` is the base model's prediction at ``base_input_size``
+    where ``x0_hr`` is the full-resolution image (clean-signal) prediction,
+    ``x0_lr`` is the base model's image prediction at ``base_input_size``
     (detached, so the term constrains only the high-resolution residual), and
     ``D`` is average pooling by the resolution factor (e.g. 256 -> 128). The
     term lets the refinement add detail that is invisible at the base
-    resolution while discouraging it from changing the base model's
-    large-scale structure.
+    resolution while keeping the large-scale appearance of the base model's
+    prediction.
+
+    The term is applied to the image prediction only. The noise prediction is
+    not constrained: the average-pooled high-resolution noise target (a mean
+    of factor^3 noise voxels) differs from the noise the base model estimates
+    on its nearest-downsampled input (one voxel), so a noise term with this
+    ``D`` would conflict with the noise MSE.
 
     Returns
     -------
@@ -94,16 +100,13 @@ def sr_train_step_lf(
     optimizer.zero_grad(set_to_none=True)
     output, base_out = model(x_t, t, return_lowres=True)
     eps_hr, img_hr = output.chunk(2, dim=1)
-    eps_lr, img_lr = base_out.detach().chunk(2, dim=1)
+    _, img_lr = base_out.detach().chunk(2, dim=1)
 
     img_loss = F.mse_loss(img_hr, x)
     noise_loss = F.mse_loss(eps_hr, noise)
 
     factor = x.shape[-1] // img_lr.shape[-1]
-    lf_loss = (
-        F.mse_loss(F.avg_pool3d(img_hr, kernel_size=factor), img_lr)
-        + F.mse_loss(F.avg_pool3d(eps_hr, kernel_size=factor), eps_lr)
-    )
+    lf_loss = F.mse_loss(F.avg_pool3d(img_hr, kernel_size=factor), img_lr)
     total_loss = noise_loss + img_loss + lf_weight * lf_loss
 
     total_loss_val = total_loss.detach().float().item()

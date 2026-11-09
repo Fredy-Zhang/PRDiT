@@ -128,16 +128,16 @@ so the default behaviour is exactly the two-term objective above. Setting
 
 $$
 \mathcal L = \|\hat x_0^{\mathrm{HR}} - x_0\|_2^2 + \|\hat\epsilon^{\mathrm{HR}} - \epsilon\|_2^2
-+ \lambda_{\mathrm{LF}}\Big(\|D(\hat x_0^{\mathrm{HR}}) - \hat x_0^{\mathrm{LR}}\|_2^2
-+ \|D(\hat\epsilon^{\mathrm{HR}}) - \hat\epsilon^{\mathrm{LR}}\|_2^2\Big),
++ \lambda_{\mathrm{LF}}\,\|D(\hat x_0^{\mathrm{HR}}) - \hat x_0^{\mathrm{LR}}\|_2^2,
 $$
 
 where $D$ is average pooling by the resolution factor (256 → 128) and
-$(\hat x_0^{\mathrm{LR}}, \hat\epsilon^{\mathrm{LR}})$ is the frozen base
-model's prediction at the base resolution (detached). The term lets the
-refinement add detail that is invisible at the base resolution while
-discouraging it from changing the base model's large-scale structure. It has
-not been tuned; no recommended $\lambda_{\mathrm{LF}}$ is given.
+$\hat x_0^{\mathrm{LR}}$ is the frozen base model's image prediction at the
+base resolution (detached). The term acts on the image (clean-signal)
+prediction only: it lets the refinement add detail that is invisible at the
+base resolution while keeping the large-scale appearance of the base model's
+prediction. The noise prediction is not constrained. It has not been tuned;
+no recommended $\lambda_{\mathrm{LF}}$ is given.
 
 Sampling from a trained stage-3 model works the same way as `sample.py`, at
 the SR target resolution:
