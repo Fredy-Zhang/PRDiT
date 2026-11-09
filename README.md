@@ -126,10 +126,9 @@ also implements the low-frequency consistency term described in the paper
 so the default behaviour is exactly the two-term objective above. Setting
 `lf_weight > 0` trains with
 
-$$
-\mathcal L = \|\hat x_0^{\mathrm{HR}} - x_0\|_2^2 + \|\hat\epsilon^{\mathrm{HR}} - \epsilon\|_2^2
-+ \lambda_{\mathrm{LF}}\,\|D(\hat x_0^{\mathrm{HR}}) - \hat x_0^{\mathrm{LR}}\|_2^2,
-$$
+```math
+\mathcal{L} = \lVert \hat{x}_0^{\mathrm{HR}} - x_0 \rVert_2^2 + \lVert \hat{\epsilon}^{\mathrm{HR}} - \epsilon \rVert_2^2 + \lambda_{\mathrm{LF}} \lVert D(\hat{x}_0^{\mathrm{HR}}) - \hat{x}_0^{\mathrm{LR}} \rVert_2^2
+```
 
 where $D$ is average pooling by the resolution factor (256 → 128) and
 $\hat x_0^{\mathrm{LR}}$ is the frozen base model's image prediction at the
