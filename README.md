@@ -120,6 +120,25 @@ stages 1–2: the image MSE and the noise MSE, summed with equal weights
 Table 2 of the paper were produced with this objective only; no additional
 low-frequency consistency loss was used.
 
+**Optional low-frequency consistency term (off by default).** `train_sr.py`
+also implements the low-frequency consistency term described in the paper
+(Sec. 3.4). It is disabled in the released configs (`training.lf_weight: 0.0`),
+so the default behaviour is exactly the two-term objective above. Setting
+`lf_weight > 0` trains with
+
+$$
+\mathcal L = \|\hat x_0^{\mathrm{HR}} - x_0\|_2^2 + \|\hat\epsilon^{\mathrm{HR}} - \epsilon\|_2^2
++ \lambda_{\mathrm{LF}}\Big(\|D(\hat x_0^{\mathrm{HR}}) - \hat x_0^{\mathrm{LR}}\|_2^2
++ \|D(\hat\epsilon^{\mathrm{HR}}) - \hat\epsilon^{\mathrm{LR}}\|_2^2\Big),
+$$
+
+where $D$ is average pooling by the resolution factor (256 → 128) and
+$(\hat x_0^{\mathrm{LR}}, \hat\epsilon^{\mathrm{LR}})$ is the frozen base
+model's prediction at the base resolution (detached). The term lets the
+refinement add detail that is invisible at the base resolution while
+discouraging it from changing the base model's large-scale structure. It has
+not been tuned; no recommended $\lambda_{\mathrm{LF}}$ is given.
+
 Sampling from a trained stage-3 model works the same way as `sample.py`, at
 the SR target resolution:
 

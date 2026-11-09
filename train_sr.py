@@ -23,11 +23,12 @@ import os
 import random
 from copy import deepcopy
 from time import time
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 import wandb
 
 from diffusion import loading_diffusion
@@ -48,6 +49,79 @@ from util import (
     update_ema,
     wandb_enabled,
 )
+
+
+def sr_train_step_lf(
+    model: torch.nn.Module,
+    diffusion,
+    x: torch.Tensor,
+    optimizer: torch.optim.Optimizer,
+    ema: torch.nn.Module,
+    device: torch.device,
+    gradient_clip: float,
+    lf_weight: float,
+) -> Optional[Tuple[float, float, float, float]]:
+    """One training step with the optional low-frequency consistency term.
+
+    Only used when ``training.lf_weight > 0``. With ``lf_weight == 0`` the
+    trainer calls ``train.train_step`` instead (the released two-term
+    objective, used for the paper's Table 2 results).
+
+    Objective::
+
+        L    = ||x0_hr - x0||^2 + ||eps_hr - eps||^2 + lf_weight * L_LF
+        L_LF = ||D(x0_hr) - x0_lr||^2 + ||D(eps_hr) - eps_lr||^2
+
+    where ``(eps_hr, x0_hr)`` is the full-resolution prediction,
+    ``(eps_lr, x0_lr)`` is the base model's prediction at ``base_input_size``
+    (detached, so the term constrains only the high-resolution residual), and
+    ``D`` is average pooling by the resolution factor (e.g. 256 -> 128). The
+    term lets the refinement add detail that is invisible at the base
+    resolution while discouraging it from changing the base model's
+    large-scale structure.
+
+    Returns
+    -------
+    tuple of float or None
+        ``(total_loss, noise_loss, img_loss, lf_loss)``, or ``None`` when the
+        loss is non-finite or exceeds ``1e5`` (step skipped, as in
+        ``train.train_step``).
+    """
+    t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
+    noise = diffusion.gen_noise(x)
+    x_t = diffusion.q_sample(x_start=x, t=t, noise=noise)
+
+    optimizer.zero_grad(set_to_none=True)
+    output, base_out = model(x_t, t, return_lowres=True)
+    eps_hr, img_hr = output.chunk(2, dim=1)
+    eps_lr, img_lr = base_out.detach().chunk(2, dim=1)
+
+    img_loss = F.mse_loss(img_hr, x)
+    noise_loss = F.mse_loss(eps_hr, noise)
+
+    factor = x.shape[-1] // img_lr.shape[-1]
+    lf_loss = (
+        F.mse_loss(F.avg_pool3d(img_hr, kernel_size=factor), img_lr)
+        + F.mse_loss(F.avg_pool3d(eps_hr, kernel_size=factor), eps_lr)
+    )
+    total_loss = noise_loss + img_loss + lf_weight * lf_loss
+
+    total_loss_val = total_loss.detach().float().item()
+    if not torch.isfinite(total_loss) or total_loss_val > 1e5:
+        return None
+
+    total_loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+    optimizer.step()
+
+    model_module = model.module if hasattr(model, "module") else model
+    update_ema(ema, model_module)
+    return (
+        total_loss_val,
+        noise_loss.detach().float().item(),
+        img_loss.detach().float().item(),
+        lf_loss.detach().float().item(),
+    )
 
 
 class SRTrainer:
@@ -230,10 +304,19 @@ class SRTrainer:
 
         train_steps = 0
         log_steps = 0
-        running_loss = running_noise_loss = running_img_loss = 0.0
+        running_loss = running_noise_loss = running_img_loss = running_lf_loss = 0.0
         start_time = time()
         gradient_clip = self.args.gradient_clip
         epoch = 0
+
+        # Optional low-frequency consistency term (off by default; the
+        # released configs and the paper's Table 2 use lf_weight = 0).
+        lf_weight = float(getattr(self.config.training, "lf_weight", 0.0) or 0.0)
+        if self.rank == 0:
+            self.logger.info(
+                f"Low-frequency consistency weight lf_weight={lf_weight} "
+                f"({'enabled' if lf_weight > 0 else 'disabled: two-term objective'})."
+            )
 
         try:
             while train_steps < total_steps_target:
@@ -244,25 +327,41 @@ class SRTrainer:
                     if train_steps >= total_steps_target:
                         break
 
-                    result = train_step(
-                        self.model,
-                        self.diffusion,
-                        batch["image"].to(self.device, non_blocking=True),
-                        self.optimizer,
-                        self.ema,
-                        self.device,
-                        gradient_clip,
-                    )
+                    x_batch = batch["image"].to(self.device, non_blocking=True)
+                    if lf_weight > 0:
+                        result = sr_train_step_lf(
+                            self.model,
+                            self.diffusion,
+                            x_batch,
+                            self.optimizer,
+                            self.ema,
+                            self.device,
+                            gradient_clip,
+                            lf_weight,
+                        )
+                    else:
+                        result = train_step(
+                            self.model,
+                            self.diffusion,
+                            x_batch,
+                            self.optimizer,
+                            self.ema,
+                            self.device,
+                            gradient_clip,
+                        )
+                        if result is not None:
+                            result = (*result, 0.0)
 
                     if result is None:
                         if self.rank == 0:
                             self.logger.warning("Skipping step: invalid loss.")
                         continue
 
-                    total_loss, noise_loss, img_loss = result
+                    total_loss, noise_loss, img_loss, lf_loss = result
                     running_loss += total_loss
                     running_noise_loss += noise_loss
                     running_img_loss += img_loss
+                    running_lf_loss += lf_loss
                     log_steps += 1
                     train_steps += 1
 
@@ -271,32 +370,36 @@ class SRTrainer:
                         steps_per_sec = log_steps / max(elapsed, 1e-8)
 
                         stats = torch.tensor(
-                            [running_loss, running_noise_loss, running_img_loss],
+                            [running_loss, running_noise_loss, running_img_loss, running_lf_loss],
                             device=self.device, dtype=torch.float32,
                         ) / log_steps
                         if dist.is_initialized() and self.world_size > 1:
                             dist.all_reduce(stats, op=dist.ReduceOp.SUM)
                             stats /= self.world_size
 
-                        avg_loss, avg_noise, avg_img = stats.tolist()
+                        avg_loss, avg_noise, avg_img, avg_lf = stats.tolist()
 
                         if self.rank == 0:
                             if wandb_enabled(self.config):
-                                wandb.log({
+                                log_dict = {
                                     "train/total_loss": avg_loss,
                                     "train/noise_loss": avg_noise,
                                     "train/img_loss": avg_img,
                                     "train/epoch": epoch,
                                     "train/step": train_steps,
-                                })
+                                }
+                                if lf_weight > 0:
+                                    log_dict["train/lf_loss"] = avg_lf
+                                wandb.log(log_dict)
+                            lf_msg = f", lf: {avg_lf:.6f}" if lf_weight > 0 else ""
                             self.logger.info(
                                 f"Epoch {epoch:4d} | Step {train_steps:7d}/{total_steps_target:,} | "
                                 f"Loss: {avg_loss:.6f} "
-                                f"(noise: {avg_noise:.6f}, img: {avg_img:.6f}) | "
+                                f"(noise: {avg_noise:.6f}, img: {avg_img:.6f}{lf_msg}) | "
                                 f"Speed: {steps_per_sec:.2f} steps/s"
                             )
 
-                        running_loss = running_noise_loss = running_img_loss = 0.0
+                        running_loss = running_noise_loss = running_img_loss = running_lf_loss = 0.0
                         log_steps = 0
                         start_time = time()
 

@@ -143,6 +143,7 @@ class PRDiTSR(nn.Module):
         x: torch.Tensor,
         t: torch.Tensor,
         return_intermediate: bool = False,
+        return_lowres: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Run stage-3 super-resolution refinement.
 
@@ -155,6 +156,11 @@ class PRDiTSR(nn.Module):
         When ``return_intermediate=True``, returns
         ``(base_upsampled, local_correction)`` as two separately-summed
         ``[B, 2*in_channels, D, H, W]`` tensors instead.
+
+        When ``return_lowres=True``, returns ``(output, base_out)``: the usual
+        full-resolution output plus the base model's own prediction at
+        ``base_input_size`` (eps, img). Used only by the optional
+        low-frequency consistency loss in ``train_sr.py``.
         """
         grad_ctx = torch.enable_grad() if self._base_finetune else torch.no_grad()
         with grad_ctx:
@@ -182,7 +188,10 @@ class PRDiTSR(nn.Module):
                 torch.cat([noise_high, img_high], dim=1),
                 torch.cat([local_eps, local_img], dim=1),
             )
-        return torch.cat([local_eps + noise_high, local_img + img_high], dim=1)
+        output = torch.cat([local_eps + noise_high, local_img + img_high], dim=1)
+        if return_lowres:
+            return output, base_out
+        return output
 
 
 def load_sr_model(config) -> PRDiTSR:

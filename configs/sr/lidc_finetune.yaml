@@ -44,6 +44,8 @@ training:
   seed: 42
   weight_decay: 0.0
   gradient_clip: 0.2
+  lf_weight: 0.0           # Optional low-frequency consistency term (README, Stage 3).
+                           # 0.0 = two-term objective used for the paper's Table 2.
 
 output:
   results_dir: "results_sr_ft"
